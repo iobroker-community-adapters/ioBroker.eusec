@@ -57,7 +57,8 @@ function getEusecInstances() {
     log('Retrieving eusec adapter instances...');
 
     try {
-        const output = executeCommand('node ..\\iobroker.js-controller\\iobroker.js object list system.adapter.eusec.*');
+        // Use iobroker CLI directly instead of node path
+        const output = executeCommand('iobroker object list system.adapter.eusec.*');
         const instances = [];
 
         // Parse the output to extract instance numbers
@@ -87,14 +88,29 @@ function getEusecInstances() {
  */
 function fixInstance(instanceNumber) {
     const objectId = `system.adapter.eusec.${instanceNumber}`;
-    const command = `node ..\\iobroker.js-controller\\iobroker.js object set ${objectId} common.nodeProcessParams=[]`;
 
     log(`Fixing instance ${instanceNumber}...`);
-    log(`Executing: ${command}`);
-
+    
     try {
+        // Stop the instance first
+        log(`Stopping instance ${instanceNumber}...`);
+        try {
+            executeCommand(`iobroker stop eusec.${instanceNumber}`);
+        } catch (error) {
+            log(`Instance might already be stopped: ${error.message}`);
+        }
+
+        // Clear the nodeProcessParams
+        const command = `iobroker object set ${objectId} common.nodeProcessParams=[]`;
+        log(`Executing: ${command}`);
         executeCommand(command);
+        
         log(`Successfully fixed instance ${instanceNumber}`);
+        
+        // Start the instance again
+        log(`Starting instance ${instanceNumber}...`);
+        executeCommand(`iobroker start eusec.${instanceNumber}`);
+        
     } catch (error) {
         log(`Failed to fix instance ${instanceNumber}: ${error.message}`);
         throw error;
