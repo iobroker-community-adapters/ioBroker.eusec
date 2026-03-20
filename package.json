@@ -35,7 +35,7 @@
     "got": "^14.6.6",
     "i18n-iso-countries": "^7.12.0",
     "mime": "^4.0.4",
-    "ts-log": "^2.2.5"
+    "ts-log": "^3.0.0"
   },
   "devDependencies": {
     "@alcalzone/release-script": "^5.1.1",
