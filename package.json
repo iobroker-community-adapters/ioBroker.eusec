@@ -29,7 +29,7 @@
     "@cospired/i18n-iso-languages": "^4.2.0",
     "@iobroker/adapter-core": "^3.3.2",
     "eufy-security-client": "^3.1.1",
-    "ffmpeg-for-homebridge": "^2.1.1",
+    "ffmpeg-for-homebridge": "^2.2.2",
     "fs-extra": "^11.3.4",
     "go2rtc-static": "^1.9.4",
     "got": "^14.6.6",
