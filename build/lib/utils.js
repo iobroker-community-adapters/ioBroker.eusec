@@ -45,7 +45,7 @@ __export(utils_exports, {
 });
 module.exports = __toCommonJS(utils_exports);
 var import_eufy_security_client = require("eufy-security-client");
-var import_path = __toESM(require("path"));
+var import_node_path = __toESM(require("node:path"));
 var import_fs_extra = __toESM(require("fs-extra"));
 var utils = __toESM(require("@iobroker/adapter-core"));
 const setStateChangedAsync = async function(adapter, id, value) {
@@ -81,11 +81,11 @@ const setStateAsync = async function(adapter, state_id, common_name, value, role
 const removeFiles = function(adapter, stationSerial, folderName, device_sn) {
   return new Promise(async (resolve, reject) => {
     try {
-      const dir_path = import_path.default.join(stationSerial, folderName);
+      const dir_path = import_node_path.default.join(stationSerial, folderName);
       if (await adapter.fileExistsAsync(adapter.namespace, dir_path)) {
         const files = (await adapter.readDirAsync(adapter.namespace, dir_path)).filter((fn) => fn.file.startsWith(device_sn));
         try {
-          files.map((filename) => adapter.delFileAsync(adapter.namespace, import_path.default.join(dir_path, filename.file)));
+          files.map((filename) => adapter.delFileAsync(adapter.namespace, import_node_path.default.join(dir_path, filename.file)));
         } catch (error) {
         }
       }
@@ -220,7 +220,7 @@ const handleUpdate = async function(adapter, log, oldVersion, newVersion) {
   if (oldVersion == 0 && newVersion == 1.3) {
     const data_dir = utils.getAbsoluteInstanceDataDir(adapter);
     try {
-      const file = import_path.default.join(data_dir, "adapter.json");
+      const file = import_node_path.default.join(data_dir, "adapter.json");
       if (import_fs_extra.default.statSync(file).isFile()) {
         const fileContent = import_fs_extra.default.readFileSync(file, "utf8");
         await adapter.writeFileAsync(adapter.namespace, "adapter.json", fileContent);
@@ -228,7 +228,7 @@ const handleUpdate = async function(adapter, log, oldVersion, newVersion) {
     } catch (error) {
     }
     try {
-      const file = import_path.default.join(data_dir, "persistent.json");
+      const file = import_node_path.default.join(data_dir, "persistent.json");
       if (import_fs_extra.default.statSync(file).isFile()) {
         const fileContent = import_fs_extra.default.readFileSync(file, "utf8");
         await adapter.writeFileAsync(adapter.namespace, "driver.json", fileContent);
