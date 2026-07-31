@@ -36,14 +36,14 @@ __export(video_exports, {
   streamToGo2rtc: () => streamToGo2rtc
 });
 module.exports = __toCommonJS(video_exports);
-var import_net = __toESM(require("net"));
-var import_path = __toESM(require("path"));
+var import_node_net = __toESM(require("node:net"));
+var import_node_path = __toESM(require("node:path"));
 var import_fluent_ffmpeg = __toESM(require("@bropat/fluent-ffmpeg"));
 var import_ffmpeg_for_homebridge = __toESM(require("ffmpeg-for-homebridge"));
 var import_eufy_security_client = require("eufy-security-client");
-var import_os = require("os");
+var import_node_os = require("node:os");
 var import_fs_extra = __toESM(require("fs-extra"));
-var import_node_stream = __toESM(require("node:stream"));
+var import_node_stream2 = __toESM(require("node:stream"));
 var import_promises = require("node:stream/promises");
 var import_utils = require("./utils");
 class UniversalStream {
@@ -59,11 +59,11 @@ class UniversalStream {
     if (process.platform === "win32") {
       const pipePrefix = "\\\\.\\pipe\\";
       const pipeName = `node-webrtc.${namespace}.${unique_sock_id}.sock`;
-      sockpath = import_path.default.join(pipePrefix, pipeName);
+      sockpath = import_node_path.default.join(pipePrefix, pipeName);
       this.url = sockpath;
     } else {
       const pipeName = `${namespace}.${unique_sock_id}.sock`;
-      sockpath = import_path.default.join((0, import_os.tmpdir)(), pipeName);
+      sockpath = import_node_path.default.join((0, import_node_os.tmpdir)(), pipeName);
       this.url = "unix:" + sockpath;
       try {
         if (import_fs_extra.default.existsSync(sockpath))
@@ -71,7 +71,7 @@ class UniversalStream {
       } catch (error) {
       }
     }
-    this.server = import_net.default.createServer(onSocket);
+    this.server = import_node_net.default.createServer(onSocket);
     this.server.listen(sockpath);
     this.server.on("error", () => {
     });
@@ -302,7 +302,7 @@ const streamToGo2rtc = async (camera, videoStream, audioStream, log, _config, _n
           log.error(`streamToGo2rtc(): Got Videostream Error: ${error.message}`);
         }
       }),
-      new import_node_stream.default.PassThrough()
+      new import_node_stream2.default.PassThrough()
     ),
     (0, import_promises.pipeline)(
       audioStream,
@@ -312,7 +312,7 @@ const streamToGo2rtc = async (camera, videoStream, audioStream, log, _config, _n
           log.error(`streamToGo2rtc(): Got Audiostream Error: ${error.message}`);
         }
       }),
-      new import_node_stream.default.PassThrough()
+      new import_node_stream2.default.PassThrough()
     )
     // Alternative implementation in case of go2rtc audio bitstream isn't working (<= 1.8.5)
     /*new Promise<void>((resolve, reject) => {

@@ -32,18 +32,22 @@ __export(main_exports, {
 });
 module.exports = __toCommonJS(main_exports);
 var utils = __toESM(require("@iobroker/adapter-core"));
-var path = __toESM(require("path"));
+var path = __toESM(require("node:path"));
 var import_eufy_security_client = require("eufy-security-client");
 var import_i18n_iso_countries = require("i18n-iso-countries");
 var import_i18n_iso_languages = require("@cospired/i18n-iso-languages");
-var import_util = __toESM(require("util"));
-var import_child_process = __toESM(require("child_process"));
+var import_node_util = __toESM(require("node:util"));
+var import_node_child_process = __toESM(require("node:child_process"));
 var import_go2rtc_static = __toESM(require("go2rtc-static"));
 var import_ffmpeg_for_homebridge = __toESM(require("ffmpeg-for-homebridge"));
 var import_types = require("./lib/types");
 var import_utils = require("./lib/utils");
 var import_log = require("./lib/log");
 var import_video = require("./lib/video");
+const GO2RTC_RESTART_DELAY_MIN = 1e3;
+const GO2RTC_RESTART_DELAY_MAX = 3e4;
+const GO2RTC_HEALTHY_RUNTIME = 6e4;
+const VIDEO_STREAMING_QUALITY_AUTO = 0;
 class euSec extends utils.Adapter {
   eufy;
   /*private downloadEvent: {
@@ -58,6 +62,10 @@ class euSec extends utils.Adapter {
   captchaId = null;
   verify_code = false;
   skipInit = false;
+  go2rtcProcess = void 0;
+  go2rtcRestartTimeout = void 0;
+  go2rtcRestarts = 0;
+  terminating = false;
   constructor(options = {}) {
     super({
       ...options,
@@ -67,6 +75,10 @@ class euSec extends utils.Adapter {
     this.on("stateChange", this.onStateChange.bind(this));
     this.on("message", this.onMessage.bind(this));
     this.on("unload", this.onUnload.bind(this));
+    process.on("exit", () => {
+      var _a;
+      return (_a = this.go2rtcProcess) == null ? void 0 : _a.kill();
+    });
   }
   restartAdapter() {
     this.skipInit = true;
@@ -338,24 +350,7 @@ class euSec extends utils.Adapter {
           for (const device of await this.eufy.getDevices()) {
             go2rtcConfig.streams[device.getSerial()] = null;
           }
-          const go2rtc = import_child_process.default.spawn(import_go2rtc_static.default, ["-config", JSON.stringify(go2rtcConfig)], { shell: false, detached: false, windowsHide: true });
-          go2rtc.on("error", (error) => {
-            this.log.error(`go2rtc error: ${error}`);
-          });
-          go2rtc.stdout.setEncoding("utf8");
-          go2rtc.stdout.on("data", (data) => {
-            this.log.info(`go2rtc started: ${data}`);
-          });
-          go2rtc.stderr.setEncoding("utf8");
-          go2rtc.stderr.on("data", (data) => {
-            this.log.error(`go2rtc error: ${data}`);
-          });
-          go2rtc.on("close", (exitcode) => {
-            this.log.info(`go2rtc terminated with exitcode ${exitcode}`);
-          });
-          process.on("exit", () => {
-            go2rtc.kill();
-          });
+          this.startGo2rtc(JSON.stringify(go2rtcConfig));
         }
       }
       const channels = await this.getChannelsAsync();
@@ -367,6 +362,59 @@ class euSec extends utils.Adapter {
           }
         }
       }
+    }
+  }
+  /**
+   * Starts go2rtc and keeps it running. Without this, a crashed go2rtc was only reported with
+   * this.log.info() and never restarted, so every livestream failed until the adapter itself was
+   * restarted - at the default log level "info" the reason was not even visible.
+   *
+   * @param go2rtcConfig The serialized go2rtc configuration
+   */
+  startGo2rtc(go2rtcConfig) {
+    if (!import_go2rtc_static.default || this.terminating) {
+      return;
+    }
+    const startedAt = Date.now();
+    const go2rtc = import_node_child_process.default.spawn(import_go2rtc_static.default, ["-config", go2rtcConfig], { shell: false, detached: false, windowsHide: true });
+    this.go2rtcProcess = go2rtc;
+    go2rtc.on("error", (error) => {
+      this.log.error(`go2rtc error: ${error}`);
+    });
+    go2rtc.stdout.setEncoding("utf8");
+    go2rtc.stdout.on("data", (data) => {
+      this.log.info(`go2rtc: ${data}`);
+    });
+    go2rtc.stderr.setEncoding("utf8");
+    go2rtc.stderr.on("data", (data) => {
+      this.log.error(`go2rtc error: ${data}`);
+    });
+    go2rtc.on("close", (exitcode) => {
+      this.go2rtcProcess = void 0;
+      if (this.terminating) {
+        this.log.info(`go2rtc terminated with exitcode ${exitcode}`);
+        return;
+      }
+      if (Date.now() - startedAt >= GO2RTC_HEALTHY_RUNTIME) {
+        this.go2rtcRestarts = 0;
+      }
+      const delay = Math.min(GO2RTC_RESTART_DELAY_MAX, GO2RTC_RESTART_DELAY_MIN * 2 ** this.go2rtcRestarts);
+      this.go2rtcRestarts++;
+      this.log.error(`go2rtc terminated unexpectedly with exitcode ${exitcode} - livestreaming is unavailable, restarting in ${delay / 1e3}s`);
+      this.go2rtcRestartTimeout = this.setTimeout(() => {
+        this.go2rtcRestartTimeout = void 0;
+        this.startGo2rtc(go2rtcConfig);
+      }, delay);
+    });
+  }
+  stopGo2rtc() {
+    if (this.go2rtcRestartTimeout) {
+      this.clearTimeout(this.go2rtcRestartTimeout);
+      this.go2rtcRestartTimeout = void 0;
+    }
+    if (this.go2rtcProcess) {
+      this.go2rtcProcess.kill();
+      this.go2rtcProcess = void 0;
     }
   }
   async writePersistentData() {
@@ -386,6 +434,8 @@ class euSec extends utils.Adapter {
    */
   async onUnload(callback) {
     try {
+      this.terminating = true;
+      this.stopGo2rtc();
       await this.writePersistentData();
       if (this.eufy) {
         if (this.eufy.isConnected())
@@ -772,7 +822,7 @@ class euSec extends utils.Adapter {
           obj.native.commandId = property.commandId;
           changed = true;
         }
-        if (obj.common !== void 0 && !import_util.default.isDeepStrictEqual(obj.common, state)) {
+        if (obj.common !== void 0 && !import_node_util.default.isDeepStrictEqual(obj.common, state)) {
           changed = true;
         }
         if (changed) {
@@ -1468,6 +1518,9 @@ class euSec extends utils.Adapter {
       const station = await this.eufy.getStation(device.getStationSerial());
       if (station.isConnected() || station.isEnergySavingDevice()) {
         if (!station.isLiveStreaming(device)) {
+          if (device.hasProperty(import_eufy_security_client.PropertyName.DeviceVideoStreamingQuality) && device.getPropertyValue(import_eufy_security_client.PropertyName.DeviceVideoStreamingQuality) === VIDEO_STREAMING_QUALITY_AUTO) {
+            this.logger.warn(`The video streaming quality of device ${device_sn} is set to "Auto". The camera may change the resolution while the stream is running, which browsers using MSE cannot follow (green picture or artifacts). Set a fixed quality if you see this.`);
+          }
           this.eufy.startStationLivestream(device_sn);
         } else {
           this.logger.warn(`The stream for the device ${device_sn} cannot be started, because it is already streaming!`);
@@ -1596,6 +1649,16 @@ class euSec extends utils.Adapter {
       native: {}
     });
     await this.setStateAsync(station.getStateID(import_types.StationStateID.CONNECTION), { val: false, ack: true });
+    try {
+      for (const device of await this.eufy.getDevicesFromStation(station.getSerial())) {
+        await this.delStateAsync(device.getStateID(import_types.DeviceStateID.LIVESTREAM)).catch(() => {
+        });
+        await this.delStateAsync(device.getStateID(import_types.DeviceStateID.LIVESTREAM_RTSP)).catch(() => {
+        });
+      }
+    } catch (error) {
+      this.logger.error(`Station: ${station.getSerial()} - Error while clearing livestream states`, error);
+    }
   }
   onTFARequest() {
     this.logger.warn(`Two factor authentication request received, please enter valid verification code in state ${this.namespace}.verify_code`);
