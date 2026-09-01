@@ -24,6 +24,14 @@ import { ioBrokerLogger } from "./lib/log";
 import { streamToGo2rtcFailed } from "./lib/go2rtc";
 import { streamToGo2rtc } from "./lib/video";
 
+/** Restart backoff for go2rtc: 1s, 2s, 4s ... capped, reset once it stayed up for a while. */
+const GO2RTC_RESTART_DELAY_MIN = 1000;
+const GO2RTC_RESTART_DELAY_MAX = 30000;
+const GO2RTC_HEALTHY_RUNTIME = 60000;
+
+/** "Auto" of DeviceVideoStreamingQualityProperty.states in eufy-security-client. */
+const VIDEO_STREAMING_QUALITY_AUTO = 0;
+
 export class euSec extends utils.Adapter {
 
     private eufy!: EufySecurity;
@@ -40,6 +48,10 @@ export class euSec extends utils.Adapter {
     private captchaId: string | null = null;
     private verify_code = false;
     private skipInit = false;
+    private go2rtcProcess: childProcess.ChildProcess | undefined = undefined;
+    private go2rtcRestartTimeout: ioBroker.Timeout | undefined = undefined;
+    private go2rtcRestarts = 0;
+    private terminating = false;
 
     public constructor(options: Partial<utils.AdapterOptions> = {}) {
         super({
@@ -52,6 +64,10 @@ export class euSec extends utils.Adapter {
         // this.on("objectChange", this.onObjectChange.bind(this));
         this.on("message", this.onMessage.bind(this));
         this.on("unload", this.onUnload.bind(this));
+
+        // Safety net, registered once: onUnload does not run on every way out (uncaught exception),
+        // and a surviving go2rtc would hold the configured ports against the next start.
+        process.on("exit", () => this.go2rtcProcess?.kill());
     }
 
     public restartAdapter(): void {
@@ -355,24 +371,7 @@ export class euSec extends utils.Adapter {
                     for (const device of await this.eufy.getDevices()) {
                         go2rtcConfig.streams[device.getSerial()] = null;
                     }
-                    const go2rtc = childProcess.spawn(pathToGo2rtc, ["-config", JSON.stringify(go2rtcConfig)], { shell: false, detached: false, windowsHide: true });
-                    go2rtc.on("error", (error) => {
-                        this.log.error(`go2rtc error: ${error}`);
-                    });
-                    go2rtc.stdout.setEncoding("utf8");
-                    go2rtc.stdout.on("data", (data) => {
-                        this.log.info(`go2rtc started: ${data}`);
-                    });
-                    go2rtc.stderr.setEncoding("utf8");
-                    go2rtc.stderr.on("data", (data) => {
-                        this.log.error(`go2rtc error: ${data}`);
-                    });
-                    go2rtc.on("close", (exitcode) => {
-                        this.log.info(`go2rtc terminated with exitcode ${exitcode}`);
-                    });
-                    process.on("exit", () => {
-                        go2rtc.kill();
-                    });
+                    this.startGo2rtc(JSON.stringify(go2rtcConfig));
                 }
             }
             // Delete cunknown channels without childs
@@ -385,6 +384,65 @@ export class euSec extends utils.Adapter {
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Starts go2rtc and keeps it running. Without this, a crashed go2rtc was only reported with
+     * this.log.info() and never restarted, so every livestream failed until the adapter itself was
+     * restarted - at the default log level "info" the reason was not even visible.
+     *
+     * @param go2rtcConfig The serialized go2rtc configuration
+     */
+    private startGo2rtc(go2rtcConfig: string): void {
+        if (!pathToGo2rtc || this.terminating) {
+            return;
+        }
+
+        const startedAt = Date.now();
+        const go2rtc = childProcess.spawn(pathToGo2rtc, ["-config", go2rtcConfig], { shell: false, detached: false, windowsHide: true });
+        this.go2rtcProcess = go2rtc;
+
+        go2rtc.on("error", (error) => {
+            this.log.error(`go2rtc error: ${error}`);
+        });
+        go2rtc.stdout.setEncoding("utf8");
+        go2rtc.stdout.on("data", (data) => {
+            this.log.info(`go2rtc: ${data}`);
+        });
+        go2rtc.stderr.setEncoding("utf8");
+        go2rtc.stderr.on("data", (data) => {
+            this.log.error(`go2rtc error: ${data}`);
+        });
+        go2rtc.on("close", (exitcode) => {
+            this.go2rtcProcess = undefined;
+            if (this.terminating) {
+                this.log.info(`go2rtc terminated with exitcode ${exitcode}`);
+                return;
+            }
+            // A process that ran for a while was healthy - do not let an old crash shorten the
+            // backoff of an unrelated one much later.
+            if (Date.now() - startedAt >= GO2RTC_HEALTHY_RUNTIME) {
+                this.go2rtcRestarts = 0;
+            }
+            const delay = Math.min(GO2RTC_RESTART_DELAY_MAX, GO2RTC_RESTART_DELAY_MIN * 2 ** this.go2rtcRestarts);
+            this.go2rtcRestarts++;
+            this.log.error(`go2rtc terminated unexpectedly with exitcode ${exitcode} - livestreaming is unavailable, restarting in ${delay / 1000}s`);
+            this.go2rtcRestartTimeout = this.setTimeout(() => {
+                this.go2rtcRestartTimeout = undefined;
+                this.startGo2rtc(go2rtcConfig);
+            }, delay);
+        });
+    }
+
+    private stopGo2rtc(): void {
+        if (this.go2rtcRestartTimeout) {
+            this.clearTimeout(this.go2rtcRestartTimeout);
+            this.go2rtcRestartTimeout = undefined;
+        }
+        if (this.go2rtcProcess) {
+            this.go2rtcProcess.kill();
+            this.go2rtcProcess = undefined;
         }
     }
 
@@ -407,6 +465,10 @@ export class euSec extends utils.Adapter {
      */
     private async onUnload(callback: () => void): Promise<void> {
         try {
+            // Before anything else, so the exit of go2rtc is not mistaken for a crash and restarted
+            // into a shutting down adapter.
+            this.terminating = true;
+            this.stopGo2rtc();
 
             await this.writePersistentData();
 
@@ -1628,6 +1690,13 @@ export class euSec extends utils.Adapter {
 
             if (station.isConnected() || station.isEnergySavingDevice()) {
                 if (!station.isLiveStreaming(device)) {
+                    if (device.hasProperty(PropertyName.DeviceVideoStreamingQuality) &&
+                        device.getPropertyValue(PropertyName.DeviceVideoStreamingQuality) === VIDEO_STREAMING_QUALITY_AUTO) {
+                        // Measured on a T84A1: 2048x1536 -> 800x600 -> 1600x1200 within 20 seconds.
+                        // Every switch is a new SPS, and go2rtc does not hand out a new MSE init
+                        // segment for it, so browsers keep decoding against the old one.
+                        this.logger.warn(`The video streaming quality of device ${device_sn} is set to "Auto". The camera may change the resolution while the stream is running, which browsers using MSE cannot follow (green picture or artifacts). Set a fixed quality if you see this.`);
+                    }
                     this.eufy.startStationLivestream(device_sn);
                 } else {
                     this.logger.warn(`The stream for the device ${device_sn} cannot be started, because it is already streaming!`);
@@ -1774,6 +1843,17 @@ export class euSec extends utils.Adapter {
             native: {},
         });
         await this.setStateAsync(station.getStateID(StationStateID.CONNECTION), { val: false, ack: true });
+
+        // A station that dropped cannot be feeding go2rtc any more. Leaving the livestream states
+        // in place points every consumer at a producer that no longer exists.
+        try {
+            for (const device of await this.eufy.getDevicesFromStation(station.getSerial())) {
+                await this.delStateAsync(device.getStateID(DeviceStateID.LIVESTREAM)).catch(() => { /* not streaming */ });
+                await this.delStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP)).catch(() => { /* not streaming */ });
+            }
+        } catch (error) {
+            this.logger.error(`Station: ${station.getSerial()} - Error while clearing livestream states`, error);
+        }
     }
 
     private onTFARequest(): void {
