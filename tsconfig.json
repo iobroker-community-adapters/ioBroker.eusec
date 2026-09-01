@@ -13,6 +13,10 @@
         "allowJs": true,
         "checkJs": true,
 
+        // @tsconfig/node22 >= 22.0.6 sets "types": ["node"], which switches off the
+        // automatic inclusion of all @types packages => list the needed ones explicitly
+        "types": ["node", "mocha"],
+
         "skipLibCheck": true, // Don't report errors in 3rd party definitions
         "noEmitOnError": true,
         "outDir": "./build/",
