@@ -11,6 +11,7 @@ import stream from "node:stream";
 import {pipeline as streamPipeline} from "node:stream/promises";
 
 import { ioBrokerLogger } from "./log";
+import { isRegularStreamEnd } from "./go2rtc";
 import { getShortUrl, lowestUnusedNumber } from "./utils";
 
 class UniversalStream {
@@ -307,7 +308,7 @@ export const ffmpegStreamToGo2rtc = (config: ioBroker.AdapterConfig, namespace: 
     });
 }
 
-export const streamToGo2rtc = async (camera: string, videoStream: Readable, audioStream: Readable, log: ioBrokerLogger, _config: ioBroker.AdapterConfig, _namespace: string, _metadata: StreamMetadata): Promise<Array<PromiseSettledResult<void>>> => {
+export const streamToGo2rtc = async (camera: string, videoStream: Readable, audioStream: Readable, log: ioBrokerLogger, config: ioBroker.AdapterConfig, _namespace: string, _metadata: StreamMetadata): Promise<Array<PromiseSettledResult<void>>> => {
     const { default: got } = await import("got");
     const api = got.extend({
         hooks: {
@@ -333,11 +334,12 @@ export const streamToGo2rtc = async (camera: string, videoStream: Readable, audi
     audioStream.on("error", (error) => {
         log.error("streamToGo2rtc(): Audiostream Error", error);
     });
-    return Promise.allSettled([
+    const ingestUrl = `http://localhost:${config.go2rtc_api_port}/api/stream?dst=${camera}`;
+    const results = await Promise.allSettled([
         streamPipeline(
             videoStream,
-            api.stream.post(`http://localhost:1984/api/stream?dst=${camera}`).on("error", (error: any) => {
-                if (!(error.response?.body as string)?.startsWith("EOF")) {
+            api.stream.post(ingestUrl).on("error", (error: any) => {
+                if (!isRegularStreamEnd(error)) {
                     log.error(`streamToGo2rtc(): Got Videostream Error: ${error.message}`);
                 }
             }),
@@ -345,8 +347,8 @@ export const streamToGo2rtc = async (camera: string, videoStream: Readable, audi
         ),
         streamPipeline(
             audioStream,
-            api.stream.post(`http://localhost:1984/api/stream?dst=${camera}`).on("error", (error: any) => {
-                if (!(error.response?.body as string)?.startsWith("EOF")) {
+            api.stream.post(ingestUrl).on("error", (error: any) => {
+                if (!isRegularStreamEnd(error)) {
                     log.error(`streamToGo2rtc(): Got Audiostream Error: ${error.message}`);
                 }
             }),
@@ -417,4 +419,14 @@ export const streamToGo2rtc = async (camera: string, videoStream: Readable, audi
             }
         })*/
     ]);
+
+    // Without this the rejection is swallowed by allSettled and a dead pipeline stays invisible,
+    // while the camera keeps streaming until the maximum livestream duration expires.
+    for (const result of results) {
+        if (result.status === "rejected" && !isRegularStreamEnd(result.reason)) {
+            log.error(`streamToGo2rtc(): Stream to go2rtc failed: ${result.reason}`);
+        }
+    }
+
+    return results;
 }

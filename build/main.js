@@ -43,6 +43,7 @@ var import_ffmpeg_for_homebridge = __toESM(require("ffmpeg-for-homebridge"));
 var import_types = require("./lib/types");
 var import_utils = require("./lib/utils");
 var import_log = require("./lib/log");
+var import_go2rtc = require("./lib/go2rtc");
 var import_video = require("./lib/video");
 const GO2RTC_RESTART_DELAY_MIN = 1e3;
 const GO2RTC_RESTART_DELAY_MAX = 3e4;
@@ -350,7 +351,24 @@ class euSec extends utils.Adapter {
           for (const device of await this.eufy.getDevices()) {
             go2rtcConfig.streams[device.getSerial()] = null;
           }
-          this.startGo2rtc(JSON.stringify(go2rtcConfig));
+          const go2rtc = import_node_child_process.default.spawn(import_go2rtc_static.default, ["-config", JSON.stringify(go2rtcConfig)], { shell: false, detached: false, windowsHide: true });
+          go2rtc.on("error", (error) => {
+            this.log.error(`go2rtc error: ${error}`);
+          });
+          go2rtc.stdout.setEncoding("utf8");
+          go2rtc.stdout.on("data", (data) => {
+            this.log.info(`go2rtc started: ${data}`);
+          });
+          go2rtc.stderr.setEncoding("utf8");
+          go2rtc.stderr.on("data", (data) => {
+            this.log.error(`go2rtc error: ${data}`);
+          });
+          go2rtc.on("close", (exitcode) => {
+            this.log.info(`go2rtc terminated with exitcode ${exitcode}`);
+          });
+          process.on("exit", () => {
+            go2rtc.kill();
+          });
         }
       }
       const channels = await this.getChannelsAsync();
@@ -1552,9 +1570,13 @@ class euSec extends utils.Adapter {
     try {
       this.setStateAsync(device.getStateID(import_types.DeviceStateID.LIVESTREAM), { val: `${this.config.https ? "https" : "http"}://${this.config.hostname}:${this.config.go2rtc_api_port}/stream.html?src=${device.getSerial()}`, ack: true });
       this.setStateAsync(device.getStateID(import_types.DeviceStateID.LIVESTREAM_RTSP), { val: `rtsp://${this.config.hostname}:${this.config.go2rtc_rtsp_port}/${device.getSerial()}`, ack: true });
-      await (0, import_video.streamToGo2rtc)(device.getSerial(), videostream, audiostream, this.logger, this.config, this.namespace, metadata).catch((error) => {
-        this.logger.debug(`Station: ${station.getSerial()} Device: ${device.getSerial()} - Stopping livestream...`, error);
-      });
+      const results = await (0, import_video.streamToGo2rtc)(device.getSerial(), videostream, audiostream, this.logger, this.config, this.namespace, metadata);
+      if ((0, import_go2rtc.streamToGo2rtcFailed)(results)) {
+        this.logger.warn(`Station: ${station.getSerial()} Device: ${device.getSerial()} - Streaming to go2rtc failed - Stopping livestream...`);
+        await this.eufy.stopStationLivestream(device.getSerial()).catch((error) => {
+          this.logger.error(`Station: ${station.getSerial()} Device: ${device.getSerial()} - Error during stopping livestream...`, error);
+        });
+      }
     } catch (error) {
       this.logger.error(`Station: ${station.getSerial()} Device: ${device.getSerial()} - Error - Stopping livestream...`, error);
       this.eufy.stopStationLivestream(device.getSerial()).catch(async (error2) => {
