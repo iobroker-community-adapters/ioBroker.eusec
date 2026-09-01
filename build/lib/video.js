@@ -36,15 +36,16 @@ __export(video_exports, {
   streamToGo2rtc: () => streamToGo2rtc
 });
 module.exports = __toCommonJS(video_exports);
-var import_net = __toESM(require("net"));
-var import_path = __toESM(require("path"));
+var import_node_net = __toESM(require("node:net"));
+var import_node_path = __toESM(require("node:path"));
 var import_fluent_ffmpeg = __toESM(require("@bropat/fluent-ffmpeg"));
 var import_ffmpeg_for_homebridge = __toESM(require("ffmpeg-for-homebridge"));
 var import_eufy_security_client = require("eufy-security-client");
-var import_os = require("os");
+var import_node_os = require("node:os");
 var import_fs_extra = __toESM(require("fs-extra"));
-var import_node_stream = __toESM(require("node:stream"));
+var import_node_stream2 = __toESM(require("node:stream"));
 var import_promises = require("node:stream/promises");
+var import_go2rtc = require("./go2rtc");
 var import_utils = require("./utils");
 class UniversalStream {
   url;
@@ -59,11 +60,11 @@ class UniversalStream {
     if (process.platform === "win32") {
       const pipePrefix = "\\\\.\\pipe\\";
       const pipeName = `node-webrtc.${namespace}.${unique_sock_id}.sock`;
-      sockpath = import_path.default.join(pipePrefix, pipeName);
+      sockpath = import_node_path.default.join(pipePrefix, pipeName);
       this.url = sockpath;
     } else {
       const pipeName = `${namespace}.${unique_sock_id}.sock`;
-      sockpath = import_path.default.join((0, import_os.tmpdir)(), pipeName);
+      sockpath = import_node_path.default.join((0, import_node_os.tmpdir)(), pipeName);
       this.url = "unix:" + sockpath;
       try {
         if (import_fs_extra.default.existsSync(sockpath))
@@ -71,7 +72,7 @@ class UniversalStream {
       } catch (error) {
       }
     }
-    this.server = import_net.default.createServer(onSocket);
+    this.server = import_node_net.default.createServer(onSocket);
     this.server.listen(sockpath);
     this.server.on("error", () => {
     });
@@ -268,7 +269,7 @@ ${stderr}`);
     }
   });
 };
-const streamToGo2rtc = async (camera, videoStream, audioStream, log, _config, _namespace, _metadata) => {
+const streamToGo2rtc = async (camera, videoStream, audioStream, log, config, _namespace, _metadata) => {
   const { default: got } = await import("got");
   const api = got.extend({
     hooks: {
@@ -293,26 +294,25 @@ const streamToGo2rtc = async (camera, videoStream, audioStream, log, _config, _n
   audioStream.on("error", (error) => {
     log.error("streamToGo2rtc(): Audiostream Error", error);
   });
-  return Promise.allSettled([
+  const ingestUrl = `http://localhost:${config.go2rtc_api_port}/api/stream?dst=${camera}`;
+  const results = await Promise.allSettled([
     (0, import_promises.pipeline)(
       videoStream,
-      api.stream.post(`http://localhost:1984/api/stream?dst=${camera}`).on("error", (error) => {
-        var _a, _b;
-        if (!((_b = (_a = error.response) == null ? void 0 : _a.body) == null ? void 0 : _b.startsWith("EOF"))) {
+      api.stream.post(ingestUrl).on("error", (error) => {
+        if (!(0, import_go2rtc.isRegularStreamEnd)(error)) {
           log.error(`streamToGo2rtc(): Got Videostream Error: ${error.message}`);
         }
       }),
-      new import_node_stream.default.PassThrough()
+      new import_node_stream2.default.PassThrough()
     ),
     (0, import_promises.pipeline)(
       audioStream,
-      api.stream.post(`http://localhost:1984/api/stream?dst=${camera}`).on("error", (error) => {
-        var _a, _b;
-        if (!((_b = (_a = error.response) == null ? void 0 : _a.body) == null ? void 0 : _b.startsWith("EOF"))) {
+      api.stream.post(ingestUrl).on("error", (error) => {
+        if (!(0, import_go2rtc.isRegularStreamEnd)(error)) {
           log.error(`streamToGo2rtc(): Got Audiostream Error: ${error.message}`);
         }
       }),
-      new import_node_stream.default.PassThrough()
+      new import_node_stream2.default.PassThrough()
     )
     // Alternative implementation in case of go2rtc audio bitstream isn't working (<= 1.8.5)
     /*new Promise<void>((resolve, reject) => {
@@ -379,6 +379,12 @@ const streamToGo2rtc = async (camera, videoStream, audioStream, log, _config, _n
                 }
             })*/
   ]);
+  for (const result of results) {
+    if (result.status === "rejected" && !(0, import_go2rtc.isRegularStreamEnd)(result.reason)) {
+      log.error(`streamToGo2rtc(): Stream to go2rtc failed: ${result.reason}`);
+    }
+  }
+  return results;
 };
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {

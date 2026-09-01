@@ -21,6 +21,7 @@ import { DeviceStateID, DataLocation, RoleMapping, StationStateID } from "./lib/
 import { convertCamelCaseToSnakeCase, getImageAsHTML, handleUpdate, removeFiles, removeLastChar, setStateChangedAsync } from "./lib/utils";
 import { PersistentData } from "./lib/interfaces";
 import { ioBrokerLogger } from "./lib/log";
+import { streamToGo2rtcFailed } from "./lib/go2rtc";
 import { streamToGo2rtc } from "./lib/video";
 
 export class euSec extends utils.Adapter {
@@ -1662,9 +1663,16 @@ export class euSec extends utils.Adapter {
             this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM), { val: `${this.config.https ? "https" : "http"}://${this.config.hostname}:${this.config.go2rtc_api_port}/stream.html?src=${device.getSerial()}`, ack: true });
             this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP), { val: `rtsp://${this.config.hostname}:${this.config.go2rtc_rtsp_port}/${device.getSerial()}`, ack: true });
             //await ffmpegStreamToGo2rtc(this.config, this.namespace, device.getSerial(), metadata, videostream, audiostream, this.logger);
-            await streamToGo2rtc(device.getSerial(), videostream, audiostream, this.logger, this.config, this.namespace, metadata).catch((error) => {
-                this.logger.debug(`Station: ${station.getSerial()} Device: ${device.getSerial()} - Stopping livestream...`, error);
-            });
+            const results = await streamToGo2rtc(device.getSerial(), videostream, audiostream, this.logger, this.config, this.namespace, metadata);
+            if (streamToGo2rtcFailed(results)) {
+                // streamToGo2rtc() settles instead of rejecting, so a broken pipeline never reached
+                // the catch below and the camera kept streaming into nothing until it timed out.
+                this.logger.warn(`Station: ${station.getSerial()} Device: ${device.getSerial()} - Streaming to go2rtc failed - Stopping livestream...`);
+                await this.eufy.stopStationLivestream(device.getSerial())
+                    .catch((error) => {
+                        this.logger.error(`Station: ${station.getSerial()} Device: ${device.getSerial()} - Error during stopping livestream...`, error);
+                    });
+            }
         } catch(error) {
             this.logger.error(`Station: ${station.getSerial()} Device: ${device.getSerial()} - Error - Stopping livestream...`, error);
             this.eufy.stopStationLivestream(device.getSerial())
