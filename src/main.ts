@@ -4,46 +4,81 @@
 
 // The adapter-core module gives you access to the core ioBroker functions
 // you need to create an adapter
-import * as utils from "@iobroker/adapter-core";
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { strict } from "node:assert";
-import * as path from "node:path";
-import { Camera, Device, Station, PushMessage, P2PConnectionType, EufySecurity, EufySecurityConfig, CommandResult, CommandType, ErrorCode, PropertyValue, PropertyName, StreamMetadata, PropertyMetadataNumeric, PropertyMetadataAny, CommandName, PanTiltDirection, DeviceNotFoundError, LoginOptions, Picture, StationNotFoundError, ensureError, LogLevel, TFCardStatus } from "eufy-security-client";
-import { getAlpha2Code as getCountryCode } from "i18n-iso-countries"
-import { isValid as isValidLanguageCode } from "@cospired/i18n-iso-languages"
-import { Readable } from "node:stream";
-import util from "node:util";
-import childProcess from "node:child_process";
-import pathToGo2rtc from "go2rtc-static";
-import pathToFfmpeg from "ffmpeg-for-homebridge";
+import { Adapter, type AdapterOptions } from '@iobroker/adapter-core';
+import * as path from 'node:path';
+import {
+    type Camera,
+    type Device,
+    type Station,
+    type PushMessage,
+    type EufySecurityConfig,
+    type CommandResult,
+    type PropertyValue,
+    type StreamMetadata,
+    type PropertyMetadataNumeric,
+    type PropertyMetadataAny,
+    type LoginOptions,
+    type Picture,
+    P2PConnectionType,
+    EufySecurity,
+    CommandType,
+    ErrorCode,
+    PropertyName,
+    CommandName,
+    PanTiltDirection,
+    DeviceNotFoundError,
+    StationNotFoundError,
+    ensureError,
+    LogLevel,
+    TFCardStatus,
+} from 'eufy-security-client';
+import { getAlpha2Code as getCountryCode } from 'i18n-iso-countries';
+import { isValid as isValidLanguageCode } from '@cospired/i18n-iso-languages';
+import type { Readable } from 'node:stream';
+import util from 'node:util';
+import childProcess from 'node:child_process';
+import pathToGo2rtc from 'go2rtc-static';
+import pathToFfmpeg from 'ffmpeg-for-homebridge';
 
-import { DeviceStateID, DataLocation, RoleMapping, StationStateID } from "./lib/types";
-import { convertCamelCaseToSnakeCase, getImageAsHTML, handleUpdate, removeFiles, removeLastChar, setStateChangedAsync } from "./lib/utils";
-import { PersistentData } from "./lib/interfaces";
-import { ioBrokerLogger } from "./lib/log";
-import { streamToGo2rtcFailed } from "./lib/go2rtc";
-import { streamToGo2rtc } from "./lib/video";
+import { DeviceStateID, DataLocation, RoleMapping, StationStateID } from './lib/types';
+import {
+    convertCamelCaseToSnakeCase,
+    getImageAsHTML,
+    handleUpdate,
+    removeFiles,
+    removeLastChar,
+    setStateChangedAsync,
+} from './lib/utils';
+import type { PersistentData } from './lib/interfaces';
+import { ioBrokerLogger } from './lib/log';
+import { applyEufyApiCompatibility } from './lib/eufyApiCompat';
+import { streamToGo2rtcFailed } from './lib/go2rtc';
+import { streamToGo2rtc } from './lib/video';
 
 /** Restart backoff for go2rtc: 1s, 2s, 4s ... capped, reset once it stayed up for a while. */
 const GO2RTC_RESTART_DELAY_MIN = 1000;
 const GO2RTC_RESTART_DELAY_MAX = 30000;
 const GO2RTC_HEALTHY_RUNTIME = 60000;
 
-/** "Auto" of DeviceVideoStreamingQualityProperty.states in eufy-security-client. */
-const VIDEO_STREAMING_QUALITY_AUTO = 0;
+/**
+ * Label prefix of the "Auto" entries in DeviceVideoStreamingQualityProperty.states. The numeric
+ * value behind it differs per device family - the base property and the S350 use 0, eufyCam 3 and
+ * the Professional models use 5, and battery doorbells have both (0 = "Auto / Low Encoding",
+ * 5 = "Auto / High Encoding") - so the value must be resolved through the label, not hardcoded.
+ */
+const VIDEO_STREAMING_QUALITY_AUTO_LABEL = 'Auto';
 
-export class euSec extends utils.Adapter {
-
+export class euSec extends Adapter {
     private eufy!: EufySecurity;
     /*private downloadEvent: {
         [index: string]: NodeJS.Timeout;
     } = {};*/
 
-    private persistentFile: string = "adapter.json";
-    private persistentDriverFile: string = "driver.json";
+    private persistentFile: string = 'adapter.json';
+    private persistentDriverFile: string = 'driver.json';
     private logger!: ioBrokerLogger;
     private persistentData: PersistentData = {
-        version: ""
+        version: '',
     };
     private captchaId: string | null = null;
     private verify_code = false;
@@ -53,21 +88,21 @@ export class euSec extends utils.Adapter {
     private go2rtcRestarts = 0;
     private terminating = false;
 
-    public constructor(options: Partial<utils.AdapterOptions> = {}) {
+    public constructor(options: Partial<AdapterOptions> = {}) {
         super({
             ...options,
-            name: "eusec",
+            name: 'eusec',
         });
 
-        this.on("ready", this.onReady.bind(this));
-        this.on("stateChange", this.onStateChange.bind(this));
+        this.on('ready', this.onReady.bind(this));
+        this.on('stateChange', this.onStateChange.bind(this));
         // this.on("objectChange", this.onObjectChange.bind(this));
-        this.on("message", this.onMessage.bind(this));
-        this.on("unload", this.onUnload.bind(this));
+        this.on('message', this.onMessage.bind(this));
+        this.on('unload', this.onUnload.bind(this));
 
         // Safety net, registered once: onUnload does not run on every way out (uncaught exception),
         // and a surviving go2rtc would hold the configured ports against the next start.
-        process.on("exit", () => this.go2rtcProcess?.kill());
+        process.on('exit', () => this.go2rtcProcess?.kill());
     }
 
     public restartAdapter(): void {
@@ -79,94 +114,94 @@ export class euSec extends utils.Adapter {
      * Is called when databases are connected and adapter received configuration.
      */
     private async onReady(): Promise<void> {
+        this.logger = new ioBrokerLogger(this.log);
 
-        this.logger = new ioBrokerLogger(this.log as ioBroker.Logger);
-
-        await this.setObjectNotExistsAsync("verify_code", {
-            type: "state",
+        await this.setObjectNotExistsAsync('verify_code', {
+            type: 'state',
             common: {
-                name: "2FA verification code",
-                type: "string",
-                role: "state",
+                name: '2FA verification code',
+                type: 'string',
+                role: 'state',
                 read: true,
                 write: true,
             },
             native: {},
         });
-        await this.setObjectNotExistsAsync("received_captcha_html", {
-            type: "state",
+        await this.setObjectNotExistsAsync('received_captcha_html', {
+            type: 'state',
             common: {
-                name: "Received captcha image HTML",
-                type: "string",
-                role: "state",
+                name: 'Received captcha image HTML',
+                type: 'string',
+                role: 'state',
                 read: true,
                 write: false,
             },
             native: {},
         });
-        await this.setObjectNotExistsAsync("captcha", {
-            type: "state",
+        await this.setObjectNotExistsAsync('captcha', {
+            type: 'state',
             common: {
-                name: "Enter captcha",
-                type: "string",
-                role: "state",
+                name: 'Enter captcha',
+                type: 'string',
+                role: 'state',
                 read: true,
                 write: true,
             },
             native: {},
         });
-        await this.setObjectNotExistsAsync("info", {
-            type: "channel",
+        await this.setObjectNotExistsAsync('info', {
+            type: 'channel',
             common: {
-                name: "info"
+                name: 'info',
             },
             native: {},
         });
-        await this.setObjectNotExistsAsync("info.connection", {
-            type: "state",
+        await this.setObjectNotExistsAsync('info.connection', {
+            type: 'state',
             common: {
-                name: "Global connection",
-                type: "boolean",
-                role: "indicator.connection",
+                name: 'Global connection',
+                type: 'boolean',
+                role: 'indicator.connection',
                 read: true,
                 write: false,
             },
             native: {},
         });
-        await this.setStateAsync("info.connection", { val: false, ack: true });
-        await this.setObjectNotExistsAsync("info.push_connection", {
-            type: "state",
+        await this.setStateAsync('info.connection', { val: false, ack: true });
+        await this.setObjectNotExistsAsync('info.push_connection', {
+            type: 'state',
             common: {
-                name: "Push notification connection",
-                type: "boolean",
-                role: "indicator.connection",
+                name: 'Push notification connection',
+                type: 'boolean',
+                role: 'indicator.connection',
                 read: true,
                 write: false,
             },
             native: {},
         });
-        await this.setStateAsync("info.push_connection", { val: false, ack: true });
-        await this.setObjectNotExistsAsync("info.mqtt_connection", {
-            type: "state",
+        await this.setStateAsync('info.push_connection', { val: false, ack: true });
+        await this.setObjectNotExistsAsync('info.mqtt_connection', {
+            type: 'state',
             common: {
-                name: "MQTT connection",
-                type: "boolean",
-                role: "indicator.connection",
+                name: 'MQTT connection',
+                type: 'boolean',
+                role: 'indicator.connection',
                 read: true,
                 write: false,
             },
             native: {},
         });
-        await this.setStateAsync("info.mqtt_connection", { val: false, ack: true });
+        await this.setStateAsync('info.mqtt_connection', { val: false, ack: true });
 
         try {
-            const connection = await this.getStatesAsync("*.connection");
-            if (connection)
+            const connection = await this.getStatesAsync('*.connection');
+            if (connection) {
                 Object.keys(connection).forEach(async id => {
                     await this.setStateAsync(id, { val: false, ack: true });
                 });
+            }
         } catch (error) {
-            this.logger.error("Reset connection states - Error", error);
+            this.logger.error('Reset connection states - Error', error);
         }
 
         try {
@@ -176,98 +211,80 @@ export class euSec extends utils.Adapter {
                 PropertyName.DeviceSoundDetected,
                 PropertyName.DeviceCryingDetected,
                 PropertyName.DevicePetDetected,
-                PropertyName.DeviceRinging
+                PropertyName.DeviceRinging,
             ];
-            for(const sensorName of sensorList) {
+            for (const sensorName of sensorList) {
                 const sensors = await this.getStatesAsync(`*.${convertCamelCaseToSnakeCase(sensorName)}`);
-                if (sensors)
+                if (sensors) {
                     Object.keys(sensors).forEach(async id => {
                         await this.setStateAsync(id, { val: false, ack: true });
                     });
+                }
             }
         } catch (error) {
-            this.logger.error("Reset sensor states - Error", error);
+            this.logger.error('Reset sensor states - Error', error);
         }
 
         try {
             if (await this.fileExistsAsync(this.namespace, this.persistentFile)) {
                 const fileContent = await this.readFileAsync(this.namespace, this.persistentFile);
-                this.persistentData = JSON.parse(fileContent.file.toString("utf8")) as PersistentData;
+                this.persistentData = JSON.parse(fileContent.file.toString('utf8')) as PersistentData;
             }
         } catch (error) {
-            this.logger.debug("No adapter stored data from last exit found.", error);
+            this.logger.debug('No adapter stored data from last exit found.', error);
         }
 
-        let persistentDriverData: string = "{}";
+        let persistentDriverData = '{}';
         try {
             if (await this.fileExistsAsync(this.namespace, this.persistentDriverFile)) {
                 const fileContent = await this.readFileAsync(this.namespace, this.persistentDriverFile);
-                persistentDriverData = fileContent.file.toString("utf8");
+                persistentDriverData = fileContent.file.toString('utf8');
             }
         } catch (error) {
-            this.logger.debug("No driver stored data from last exit found.", error);
+            this.logger.debug('No driver stored data from last exit found.', error);
         }
 
-        this.subscribeStates("verify_code");
-        this.subscribeStates("captcha");
+        this.subscribeStates('verify_code');
+        this.subscribeStates('captcha');
 
-        // -------------------------------------------------------------------------------
-        // The following sequence can be removed as soon as node 22 is required as minimum
-        // -------------------------------------------------------------------------------
-        const hosts = await this.getForeignObjectsAsync("system.host.*", "host");
+        // The --security-revert=CVE-2023-46809 workaround that used to be applied here is gone:
+        // it was only ever needed on node 20.11.1 and later, and node 22 - the minimum this
+        // adapter declares in "engines" - rejects the flag outright ("Attempt to revert an unknown
+        // CVE", exit code 12), which keeps the adapter process from starting at all. Removing a
+        // flag left over from an older installation therefore cannot be done from in here; that is
+        // what the cleanupCveFix.js postinstall script is for, which runs in a plain node process.
+        const hosts = await this.getForeignObjectsAsync('system.host.*', 'host');
         if (hosts !== undefined && hosts !== null && Object.values(hosts).length !== 0) {
-            if (this.config.hostname === "") {
+            if (this.config.hostname === '') {
                 this.config.hostname = Object.values(hosts)[0].native.os.hostname;
             }
-
-            const nodeVersion = Object.values(hosts)[0].native.process.versions.node;
-            const nodeMajorVersion = nodeVersion.split(".")[0];
-
-            let fixNeeded;
-            switch (parseInt(nodeMajorVersion)) {
-                // node 18 is no longer supported
-                case 20:
-                    fixNeeded = nodeVersion.localeCompare("20.11.1", undefined, { numeric: true, sensitivity: "base" });
-                    break;
-                // node 21 is and was not supported
-                // node 22 and newer do NOT require any fix
-                default:
-                    fixNeeded = -1; // no fix
-                    break;
-            }
-            if (fixNeeded >= 0) {
-                const adapter = await this.getForeignObjectAsync(`system.adapter.${this.namespace}`);
-                if (adapter !== undefined && adapter !== null) {
-                    if (!adapter.common.nodeProcessParams?.includes("--security-revert=CVE-2023-46809")) {
-                        adapter.common.nodeProcessParams = ["--security-revert=CVE-2023-46809"]
-                        await this.setForeignObjectAsync(`system.adapter.${this.namespace}`, adapter);
-                        this.log.warn("Required fix to use livestreaming with this version of Node.js (CVE-2023-46809) applied. Restart of the adapter initiated to activate the fix.");
-                        this.restartAdapter();
-                    }
-                }
-            }
         }
-        // -------------------------------------------------------------------------------
 
         if (!this.skipInit) {
-            const systemConfig = await this.getForeignObjectAsync("system.config");
+            const systemConfig = await this.getForeignObjectAsync('system.config');
             let countryCode = undefined;
             let languageCode = undefined;
             if (systemConfig) {
-                countryCode = getCountryCode(systemConfig.common.country!, "en");
-                if (isValidLanguageCode(systemConfig.common.language))
+                countryCode = getCountryCode(systemConfig.common.country!, 'en');
+                if (isValidLanguageCode(systemConfig.common.language)) {
                     languageCode = systemConfig.common.language;
+                }
             }
-            if (this.config.country !== "iobroker") {
+            if (this.config.country !== 'iobroker') {
                 countryCode = this.config.country;
             }
 
             // Handling adapter version update
             try {
                 if (this.persistentData.version !== this.version) {
-                    const currentVersion = Number.parseFloat(removeLastChar(this.version!, "."));
-                    const previousVersion = this.persistentData.version !== "" && this.persistentData.version !== undefined ? Number.parseFloat(removeLastChar(this.persistentData.version, ".")) : 0;
-                    this.logger.debug(`Handling of adapter update - currentVersion: ${currentVersion} previousVersion: ${previousVersion}`);
+                    const currentVersion = Number.parseFloat(removeLastChar(this.version!, '.'));
+                    const previousVersion =
+                        this.persistentData.version !== '' && this.persistentData.version !== undefined
+                            ? Number.parseFloat(removeLastChar(this.persistentData.version, '.'))
+                            : 0;
+                    this.logger.debug(
+                        `Handling of adapter update - currentVersion: ${currentVersion} previousVersion: ${previousVersion}`,
+                    );
 
                     if (previousVersion < currentVersion) {
                         await handleUpdate(this, this.logger, previousVersion, currentVersion);
@@ -280,11 +297,11 @@ export class euSec extends utils.Adapter {
             }
 
             let connectionType = P2PConnectionType.QUICKEST;
-            if (this.config.p2pConnectionType === "only_local") {
+            if (this.config.p2pConnectionType === 'only_local') {
                 connectionType = P2PConnectionType.ONLY_LOCAL;
             }
 
-            if (this.config.username !== "" && this.config.password !== "") {
+            if (this.config.username !== '' && this.config.password !== '') {
                 const config: EufySecurityConfig = {
                     username: this.config.username,
                     password: this.config.password,
@@ -296,37 +313,72 @@ export class euSec extends utils.Adapter {
                     pollingIntervalMinutes: this.config.pollingInterval,
                     acceptInvitations: this.config.acceptInvitations,
                     logging: {
-                        level: this.log.level === "silly" ? LogLevel.Trace : this.log.level === "debug" ? LogLevel.Debug : this.log.level === "info" ? LogLevel.Info : this.log.level === "warn" ? LogLevel.Warn : this.log.level === "error" ? LogLevel.Error : LogLevel.Info
-                    }
+                        level:
+                            this.log.level === 'silly'
+                                ? LogLevel.Trace
+                                : this.log.level === 'debug'
+                                  ? LogLevel.Debug
+                                  : this.log.level === 'info'
+                                    ? LogLevel.Info
+                                    : this.log.level === 'warn'
+                                      ? LogLevel.Warn
+                                      : this.log.level === 'error'
+                                        ? LogLevel.Error
+                                        : LogLevel.Info,
+                    },
                 };
 
+                // Must happen before initialize(), the first API call is made during login.
+                applyEufyApiCompatibility(message => this.logger.info(message));
+
                 this.eufy = await EufySecurity.initialize(config, this.logger);
-                this.eufy.on("persistent data", (data: string) => this.onPersistentData(data))
-                this.eufy.on("station added", (station: Station) => this.onStationAdded(station));
-                this.eufy.on("device added", (device: Device) => this.onDeviceAdded(device));
-                this.eufy.on("station removed", (station: Station) => this.onStationRemoved(station));
-                this.eufy.on("device removed", (device: Device) => this.onDeviceRemoved(device));
-                this.eufy.on("push message", (messages) => this.handlePushNotification(messages));
-                this.eufy.on("push connect", () => this.onPushConnect());
-                this.eufy.on("push close", () => this.onPushClose());
-                this.eufy.on("mqtt connect", () => this.onMQTTConnect());
-                this.eufy.on("mqtt close", () => this.onMQTTClose());
-                this.eufy.on("connect", () => this.onConnect());
-                this.eufy.on("close", () => this.onClose());
+                this.eufy.on('persistent data', (data: string) => this.onPersistentData(data));
+                this.eufy.on('station added', (station: Station) => this.onStationAdded(station));
+                this.eufy.on('device added', (device: Device) => this.onDeviceAdded(device));
+                this.eufy.on('station removed', (station: Station) => this.onStationRemoved(station));
+                this.eufy.on('device removed', (device: Device) => this.onDeviceRemoved(device));
+                this.eufy.on('push message', messages => this.handlePushNotification(messages));
+                this.eufy.on('push connect', () => this.onPushConnect());
+                this.eufy.on('push close', () => this.onPushClose());
+                this.eufy.on('mqtt connect', () => this.onMQTTConnect());
+                this.eufy.on('mqtt close', () => this.onMQTTClose());
+                this.eufy.on('connect', () => this.onConnect());
+                this.eufy.on('close', () => this.onClose());
 
-                this.eufy.on("device property changed", (device: Device, name: string, value: PropertyValue) => this.onDevicePropertyChanged(device, name, value));
+                this.eufy.on('device property changed', (device: Device, name: string, value: PropertyValue) =>
+                    this.onDevicePropertyChanged(device, name, value),
+                );
 
-                this.eufy.on("station command result", (station: Station, result: CommandResult) => this.onStationCommandResult(station, result));
+                this.eufy.on('station command result', (station: Station, result: CommandResult) =>
+                    this.onStationCommandResult(station, result),
+                );
                 //this.eufy.on("station download start", (station: Station, device: Device, metadata: StreamMetadata, videostream: Readable, audiostream: Readable) => this.onStationDownloadStart(station, device, metadata, videostream, audiostream));
                 //this.eufy.on("station download finish", (station: Station, device: Device) => this.onStationDownloadFinish(station, device));
-                this.eufy.on("station livestream start", (station: Station, device: Device, metadata: StreamMetadata, videostream: Readable, audiostream: Readable) => this.onStationLivestreamStart(station, device, metadata, videostream, audiostream));
-                this.eufy.on("station livestream stop", (station: Station, device: Device) => this.onStationLivestreamStop(station, device));
-                this.eufy.on("station rtsp url",  (station: Station, device: Device, value: string) => this.onStationRTSPUrl(station, device, value));
-                this.eufy.on("station property changed", (station: Station, name: string, value: PropertyValue) => this.onStationPropertyChanged(station, name, value));
-                this.eufy.on("station connect", (station: Station) => this.onStationConnect(station));
-                this.eufy.on("station close", (station: Station) => this.onStationClose(station));
-                this.eufy.on("tfa request", () => this.onTFARequest());
-                this.eufy.on("captcha request", (captchaId: string, captcha: string) => this.onCaptchaRequest(captchaId, captcha));
+                this.eufy.on(
+                    'station livestream start',
+                    (
+                        station: Station,
+                        device: Device,
+                        metadata: StreamMetadata,
+                        videostream: Readable,
+                        audiostream: Readable,
+                    ) => this.onStationLivestreamStart(station, device, metadata, videostream, audiostream),
+                );
+                this.eufy.on('station livestream stop', (station: Station, device: Device) =>
+                    this.onStationLivestreamStop(station, device),
+                );
+                this.eufy.on('station rtsp url', (station: Station, device: Device, value: string) =>
+                    this.onStationRTSPUrl(station, device, value),
+                );
+                this.eufy.on('station property changed', (station: Station, name: string, value: PropertyValue) =>
+                    this.onStationPropertyChanged(station, name, value),
+                );
+                this.eufy.on('station connect', (station: Station) => this.onStationConnect(station));
+                this.eufy.on('station close', (station: Station) => this.onStationClose(station));
+                this.eufy.on('tfa request', () => this.onTFARequest());
+                this.eufy.on('captcha request', (captchaId: string, captcha: string) =>
+                    this.onCaptchaRequest(captchaId, captcha),
+                );
                 this.eufy.setCameraMaxLivestreamDuration(this.config.maxLivestreamDuration);
 
                 await this.eufy.connect();
@@ -334,26 +386,25 @@ export class euSec extends utils.Adapter {
                 if (pathToGo2rtc) {
                     const go2rtcConfig: {
                         [index: string]: {
-                            [index: string]: string | number | null
-                        }
+                            [index: string]: string | number | null;
+                        };
                     } = {
-                        "api": {
-                            "listen": `:${this.config.go2rtc_api_port}`
+                        api: {
+                            listen: `:${this.config.go2rtc_api_port}`,
                         },
-                        "rtsp": {
-                            "listen": `:${this.config.go2rtc_rtsp_port}`
+                        rtsp: {
+                            listen: `:${this.config.go2rtc_rtsp_port}`,
                         },
-                        "srtp": {
-                            "listen": `:${this.config.go2rtc_srtp_port}`
+                        srtp: {
+                            listen: `:${this.config.go2rtc_srtp_port}`,
                         },
-                        "webrtc": {
-                            "listen": `:${this.config.go2rtc_webrtc_port}`
+                        webrtc: {
+                            listen: `:${this.config.go2rtc_webrtc_port}`,
                         },
-                        "ffmpeg": {
-                            // @ts-expect-error old code
-                            "bin": pathToFfmpeg !== "" && pathToFfmpeg !== undefined ? pathToFfmpeg : "ffmpeg",
+                        ffmpeg: {
+                            bin: pathToFfmpeg !== '' && pathToFfmpeg !== undefined ? pathToFfmpeg : 'ffmpeg',
                         },
-                        "streams": {},
+                        streams: {},
                         /*"log": {
                             "level": "debug",  // default level
                             "api": "debug",
@@ -364,7 +415,7 @@ export class euSec extends utils.Adapter {
                             "webrtc": "debug",
                         }*/
                     };
-                    if (this.config.go2rtc_rtsp_username !== "" && this.config.go2rtc_rtsp_password !== "") {
+                    if (this.config.go2rtc_rtsp_username !== '' && this.config.go2rtc_rtsp_password !== '') {
                         go2rtcConfig.rtsp.username = this.config.go2rtc_rtsp_username;
                         go2rtcConfig.rtsp.password = this.config.go2rtc_rtsp_password;
                     }
@@ -377,7 +428,7 @@ export class euSec extends utils.Adapter {
             // Delete cunknown channels without childs
             const channels = await this.getChannelsAsync();
             for (const channel of channels) {
-                if (channel.common.name === "unknown") {
+                if (channel.common.name === 'unknown') {
                     const states = await this.getStatesAsync(`${channel._id}.*`);
                     if (Object.keys(states).length === 0) {
                         await this.delObjectAsync(channel._id);
@@ -400,21 +451,25 @@ export class euSec extends utils.Adapter {
         }
 
         const startedAt = Date.now();
-        const go2rtc = childProcess.spawn(pathToGo2rtc, ["-config", go2rtcConfig], { shell: false, detached: false, windowsHide: true });
+        const go2rtc = childProcess.spawn(pathToGo2rtc, ['-config', go2rtcConfig], {
+            shell: false,
+            detached: false,
+            windowsHide: true,
+        });
         this.go2rtcProcess = go2rtc;
 
-        go2rtc.on("error", (error) => {
+        go2rtc.on('error', error => {
             this.log.error(`go2rtc error: ${error}`);
         });
-        go2rtc.stdout.setEncoding("utf8");
-        go2rtc.stdout.on("data", (data) => {
+        go2rtc.stdout.setEncoding('utf8');
+        go2rtc.stdout.on('data', data => {
             this.log.info(`go2rtc: ${data}`);
         });
-        go2rtc.stderr.setEncoding("utf8");
-        go2rtc.stderr.on("data", (data) => {
+        go2rtc.stderr.setEncoding('utf8');
+        go2rtc.stderr.on('data', data => {
             this.log.error(`go2rtc error: ${data}`);
         });
-        go2rtc.on("close", (exitcode) => {
+        go2rtc.on('close', exitcode => {
             this.go2rtcProcess = undefined;
             if (this.terminating) {
                 this.log.info(`go2rtc terminated with exitcode ${exitcode}`);
@@ -427,7 +482,9 @@ export class euSec extends utils.Adapter {
             }
             const delay = Math.min(GO2RTC_RESTART_DELAY_MAX, GO2RTC_RESTART_DELAY_MIN * 2 ** this.go2rtcRestarts);
             this.go2rtcRestarts++;
-            this.log.error(`go2rtc terminated unexpectedly with exitcode ${exitcode} - livestreaming is unavailable, restarting in ${delay / 1000}s`);
+            this.log.error(
+                `go2rtc terminated unexpectedly with exitcode ${exitcode} - livestreaming is unavailable, restarting in ${delay / 1000}s`,
+            );
             this.go2rtcRestartTimeout = this.setTimeout(() => {
                 this.go2rtcRestartTimeout = undefined;
                 this.startGo2rtc(go2rtcConfig);
@@ -449,19 +506,21 @@ export class euSec extends utils.Adapter {
     public async writePersistentData(): Promise<void> {
         try {
             await this.writeFileAsync(this.namespace, this.persistentFile, JSON.stringify(this.persistentData));
-        } catch(error) {
-            this.logger.error(`writePersistentData() - Error: ${error}`);
+        } catch (error) {
+            this.logger.error(`writePersistentData() - Error: ${error as Error}`);
         }
     }
 
     private onPersistentData(data: string): void {
-        this.writeFileAsync(this.namespace, this.persistentDriverFile, data).catch((error) => {
+        this.writeFileAsync(this.namespace, this.persistentDriverFile, data).catch(error => {
             this.logger.error(`writePersistentDriverData() - Error: ${error}`);
         });
     }
 
     /**
-     * Is called when adapter shuts down - callback has to be called under any circumstances!
+     * Is called when the adapter shuts down - callback has to be called under any circumstances!
+     *
+     * @param callback
      */
     private async onUnload(callback: () => void): Promise<void> {
         try {
@@ -473,14 +532,15 @@ export class euSec extends utils.Adapter {
             await this.writePersistentData();
 
             if (this.eufy) {
-                if (this.eufy.isConnected())
-                    await this.setStateAsync("info.connection", { val: false, ack: true }).catch();
+                if (this.eufy.isConnected()) {
+                    await this.setStateAsync('info.connection', { val: false, ack: true }).catch();
+                }
                 this.eufy.removeAllListeners();
                 this.eufy.close();
             }
 
             callback();
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
         } catch (e) {
             callback();
         }
@@ -503,42 +563,46 @@ export class euSec extends utils.Adapter {
 
     /**
      * Is called if a subscribed state changes
+     *
+     * @param id
+     * @param state
      */
     private async onStateChange(id: string, state: ioBroker.State | null | undefined): Promise<void> {
         if (state) {
-
             // don't do anything if the state is acked
             if (!id || state.ack) {
-                this.logger.debug(`state ${id} changed: ${state.val} (ack = ${state.ack}) was already acknowledged, ignore it...`);
+                this.logger.debug(
+                    `state ${id} changed: ${state.val} (ack = ${state.ack}) was already acknowledged, ignore it...`,
+                );
                 return;
             }
             this.logger.debug(`state ${id} changed: ${state.val} (ack = ${state.ack})`);
 
-            const values = id.split(".");
+            const values = id.split('.');
             const station_sn = values[2];
             const device_type = values[3];
 
-            if (station_sn == "verify_code") {
+            if (station_sn == 'verify_code') {
                 if (this.eufy && this.verify_code) {
                     this.logger.info(`Verification code received, send it. (verify_code: ${state.val})`);
                     await this.eufy.connect({ verifyCode: state.val as string } as LoginOptions);
                     this.verify_code = false;
                     await this.delStateAsync(id);
                 }
-            } else if (station_sn == "captcha") {
+            } else if (station_sn == 'captcha') {
                 if (this.eufy && this.captchaId) {
                     this.logger.info(`Captcha received, send it. (captcha: ${state.val})`);
                     await this.eufy.connect({
                         captcha: {
                             captchaCode: state.val as string,
-                            captchaId: this.captchaId
-                        }
+                            captchaId: this.captchaId,
+                        },
                     } as LoginOptions);
                     this.captchaId = null;
                     await this.delStateAsync(id);
-                    await this.delStateAsync("received_captcha_html");
+                    await this.delStateAsync('received_captcha_html');
                 }
-            } else if (device_type == "station") {
+            } else if (device_type == 'station') {
                 try {
                     const station_state_name = values[4];
                     if (this.eufy) {
@@ -551,15 +615,15 @@ export class euSec extends utils.Adapter {
                         }
 
                         const station = await this.eufy.getStation(station_sn);
-                        switch(station_state_name) {
+                        switch (station_state_name) {
                             case StationStateID.REBOOT:
-                                await station.rebootHUB();
+                                station.rebootHUB();
                                 break;
                             case StationStateID.TRIGGER_ALARM_SOUND:
-                                await station.triggerStationAlarmSound(this.config.alarmSoundDuration);
+                                station.triggerStationAlarmSound(this.config.alarmSoundDuration);
                                 break;
                             case StationStateID.RESET_ALARM_SOUND:
-                                await station.resetStationAlarmSound();
+                                station.resetStationAlarmSound();
                                 break;
                         }
                     }
@@ -573,9 +637,16 @@ export class euSec extends utils.Adapter {
                     if (obj) {
                         if (obj.native.name !== undefined) {
                             try {
-                                await this.eufy.setDeviceProperty(device_sn, obj.native.name, obj.common.type === "object" ? JSON.parse(state.val as string) : state.val);
+                                await this.eufy.setDeviceProperty(
+                                    device_sn,
+                                    obj.native.name,
+                                    obj.common.type === 'object' ? JSON.parse(state.val as string) : state.val,
+                                );
                             } catch (error) {
-                                this.logger.error(`Error in setting property value (property: ${obj.native.name} value: ${state.val})`, error);
+                                this.logger.error(
+                                    `Error in setting property value (property: ${obj.native.name} value: ${state.val})`,
+                                    error,
+                                );
                             }
                             return;
                         }
@@ -585,7 +656,7 @@ export class euSec extends utils.Adapter {
                     const station = await this.eufy.getStation(station_sn);
                     const device = await this.eufy.getDevice(device_sn);
 
-                    switch(device_state_name) {
+                    switch (device_state_name) {
                         case DeviceStateID.START_STREAM:
                             await this.startLivestream(device_sn);
                             break;
@@ -593,44 +664,44 @@ export class euSec extends utils.Adapter {
                             await this.stopLivestream(device_sn);
                             break;
                         case DeviceStateID.TRIGGER_ALARM_SOUND:
-                            await station.triggerDeviceAlarmSound(device, this.config.alarmSoundDuration);
+                            station.triggerDeviceAlarmSound(device, this.config.alarmSoundDuration);
                             break;
                         case DeviceStateID.RESET_ALARM_SOUND:
-                            await station.resetDeviceAlarmSound(device);
+                            station.resetDeviceAlarmSound(device);
                             break;
                         case DeviceStateID.ROTATE_360:
-                            await station.panAndTilt(device, PanTiltDirection.ROTATE360);
+                            station.panAndTilt(device, PanTiltDirection.ROTATE360);
                             break;
                         case DeviceStateID.PAN_LEFT:
-                            await station.panAndTilt(device, PanTiltDirection.LEFT);
+                            station.panAndTilt(device, PanTiltDirection.LEFT);
                             break;
                         case DeviceStateID.PAN_RIGHT:
-                            await station.panAndTilt(device, PanTiltDirection.RIGHT);
+                            station.panAndTilt(device, PanTiltDirection.RIGHT);
                             break;
                         case DeviceStateID.TILT_UP:
-                            await station.panAndTilt(device, PanTiltDirection.UP);
+                            station.panAndTilt(device, PanTiltDirection.UP);
                             break;
                         case DeviceStateID.TILT_DOWN:
-                            await station.panAndTilt(device, PanTiltDirection.DOWN);
+                            station.panAndTilt(device, PanTiltDirection.DOWN);
                             break;
                         case DeviceStateID.CALIBRATE:
                             if (device.isLock()) {
-                                await station.calibrateLock(device);
+                                station.calibrateLock(device);
                             } else {
-                                await station.calibrate(device);
+                                station.calibrate(device);
                             }
                             break;
                         case DeviceStateID.UNLOCK:
-                            await station.unlock(device);
+                            station.unlock(device);
                             break;
                         case DeviceStateID.SET_DEFAULT_ANGLE:
-                            await station.setDefaultAngle(device);
+                            station.setDefaultAngle(device);
                             break;
                         case DeviceStateID.SET_PRIVACY_ANGLE:
-                            await station.setPrivacyAngle(device);
+                            station.setPrivacyAngle(device);
                             break;
                         case DeviceStateID.OPEN_BOX:
-                            await station.open(device);
+                            station.open(device);
                             break;
                     }
                 } catch (error) {
@@ -644,197 +715,345 @@ export class euSec extends utils.Adapter {
     }
 
     /**
-     * Some message was sent to this instance over message box. Used by email, pushover, text2speech, ...
-     * Using this method requires "common.message" property to be set to true in io-package.json
+     * Some message was sent to this instance over the message box. Used by email, pushover, text2speech, ...
+     * Using this method requires the "common.message" property to be set to true in io-package.json
+     *
+     * @param obj
      */
     private async onMessage(obj: ioBroker.Message): Promise<void> {
-        if (typeof obj === "object" && obj.message) {
+        if (typeof obj === 'object' && obj.message) {
             try {
-                if (obj.command === "quickResponse") {
+                if (obj.command === 'quickResponse') {
                     this.log.debug(`quickResponse command - message: ${JSON.stringify(obj.message)}`);
-                    if (typeof obj.message === "object" &&
-                        typeof obj.message.station_sn === "string" && obj.message.station_sn !== "" &&
-                        typeof obj.message.device_sn === "string" && obj.message.device_sn !== "" &&
-                        typeof obj.message.voice_id === "number") {
+                    if (
+                        typeof obj.message === 'object' &&
+                        typeof obj.message.station_sn === 'string' &&
+                        obj.message.station_sn !== '' &&
+                        typeof obj.message.device_sn === 'string' &&
+                        obj.message.device_sn !== '' &&
+                        typeof obj.message.voice_id === 'number'
+                    ) {
                         try {
                             const station = await this.eufy.getStation(obj.message.station_sn);
                             const device = await this.eufy.getDevice(obj.message.device_sn);
 
                             if (device.hasCommand(CommandName.DeviceQuickResponse)) {
-                                await station.quickResponse(device, obj.message.voice_id);
-                                if (obj.callback)
-                                    this.sendTo(obj.from, obj.command, {
-                                        sended: true,
-                                        result: "quickResponse command sended"
-                                    }, obj.callback);
+                                station.quickResponse(device, obj.message.voice_id);
+                                if (obj.callback) {
+                                    this.sendTo(
+                                        obj.from,
+                                        obj.command,
+                                        {
+                                            sended: true, // because of back compatibility
+                                            sent: true,
+                                            result: 'quickResponse command sent',
+                                        },
+                                        obj.callback,
+                                    );
+                                }
                             } else {
-                                if (obj.callback)
-                                    this.sendTo(obj.from, obj.command, {
-                                        sended: false,
-                                        result: "quickResponse command not supported by specified device"
-                                    }, obj.callback);
+                                if (obj.callback) {
+                                    this.sendTo(
+                                        obj.from,
+                                        obj.command,
+                                        {
+                                            sended: false, // because of back compatibility
+                                            sent: false,
+                                            result: 'quickResponse command not supported by specified device',
+                                        },
+                                        obj.callback,
+                                    );
+                                }
                             }
                         } catch (error) {
                             if (error instanceof StationNotFoundError) {
-                                if (obj.callback)
-                                    this.sendTo(obj.from, obj.command, {
-                                        sended: false,
-                                        result: "quickResponse command not sended because specified station doesn't exists"
-                                    }, obj.callback);
+                                if (obj.callback) {
+                                    this.sendTo(
+                                        obj.from,
+                                        obj.command,
+                                        {
+                                            sended: false, // because of back compatibility
+                                            sent: false,
+                                            result: "quickResponse command not sent because specified station doesn't exists",
+                                        },
+                                        obj.callback,
+                                    );
+                                }
                             } else if (error instanceof DeviceNotFoundError) {
-                                if (obj.callback)
-                                    this.sendTo(obj.from, obj.command, {
-                                        sended: false,
-                                        result: "quickResponse command not sended because specified device doesn't exists"
-                                    }, obj.callback);
+                                if (obj.callback) {
+                                    this.sendTo(
+                                        obj.from,
+                                        obj.command,
+                                        {
+                                            sended: false, // because of back compatibility
+                                            sent: false,
+                                            result: "quickResponse command not sent because specified device doesn't exists",
+                                        },
+                                        obj.callback,
+                                    );
+                                }
                             } else {
                                 throw error;
                             }
                         }
                     } else {
-                        if (obj.callback)
-                            this.sendTo(obj.from, obj.command, {
-                                sended: false,
-                                result: "quickResponse command not sended because some required parameters are missing"
-                            }, obj.callback);
+                        if (obj.callback) {
+                            this.sendTo(
+                                obj.from,
+                                obj.command,
+                                {
+                                    sended: false, // because of back compatibility
+                                    sent: false,
+                                    result: 'quickResponse command not sent because some required parameters are missing',
+                                },
+                                obj.callback,
+                            );
+                        }
                     }
-                } else if (obj.command === "getQuickResponseVoices") {
+                } else if (obj.command === 'getQuickResponseVoices') {
                     this.log.debug(`getQuickResponseVoices command - message: ${JSON.stringify(obj.message)}`);
-                    if (typeof obj.message === "object" &&
-                        typeof obj.message.device_sn === "string" && obj.message.device_sn !== "") {
+                    if (
+                        typeof obj.message === 'object' &&
+                        typeof obj.message.device_sn === 'string' &&
+                        obj.message.device_sn !== ''
+                    ) {
                         const voices = await this.eufy.getApi().getVoices(obj.message.device_sn);
 
-                        if (obj.callback)
-                            this.sendTo(obj.from, obj.command, {
-                                sended: true,
-                                result: voices
-                            }, obj.callback);
+                        if (obj.callback) {
+                            this.sendTo(
+                                obj.from,
+                                obj.command,
+                                {
+                                    sended: true, // because of back compatibility
+                                    sent: true,
+                                    result: voices,
+                                },
+                                obj.callback,
+                            );
+                        }
                     } else {
-                        if (obj.callback)
-                            this.sendTo(obj.from, obj.command, {
-                                sended: false,
-                                result: "getQuickResponseVoices command not sended because some required parameters are missing"
-                            }, obj.callback);
+                        if (obj.callback) {
+                            this.sendTo(
+                                obj.from,
+                                obj.command,
+                                {
+                                    sended: false, // because of back compatibility
+                                    sent: false,
+                                    result: 'getQuickResponseVoices command not sent because some required parameters are missing',
+                                },
+                                obj.callback,
+                            );
+                        }
                     }
-                } else if (obj.command === "snooze") {
+                } else if (obj.command === 'snooze') {
                     this.log.debug(`snooze command - message: ${JSON.stringify(obj.message)}`);
-                    if (typeof obj.message === "object" &&
-                        typeof obj.message.station_sn === "string" && obj.message.station_sn !== "" &&
-                        typeof obj.message.device_sn === "string" && obj.message.device_sn !== "" &&
-                        typeof obj.message.snooze_time === "number" &&
-                        (obj.message.snooze_chime === undefined || typeof obj.message.snooze_chime === "boolean") &&
-                        (obj.message.snooze_homebase === undefined || typeof obj.message.snooze_homebase === "boolean") &&
-                        (obj.message.snooze_motion === undefined || typeof obj.message.snooze_motion === "boolean")) {
+                    if (
+                        typeof obj.message === 'object' &&
+                        typeof obj.message.station_sn === 'string' &&
+                        obj.message.station_sn !== '' &&
+                        typeof obj.message.device_sn === 'string' &&
+                        obj.message.device_sn !== '' &&
+                        typeof obj.message.snooze_time === 'number' &&
+                        (obj.message.snooze_chime === undefined || typeof obj.message.snooze_chime === 'boolean') &&
+                        (obj.message.snooze_homebase === undefined ||
+                            typeof obj.message.snooze_homebase === 'boolean') &&
+                        (obj.message.snooze_motion === undefined || typeof obj.message.snooze_motion === 'boolean')
+                    ) {
                         try {
                             const station = await this.eufy.getStation(obj.message.station_sn);
                             const device = await this.eufy.getDevice(obj.message.device_sn);
 
                             if (device.hasCommand(CommandName.DeviceSnooze)) {
-                                await station.snooze(device, {
+                                station.snooze(device, {
                                     snooze_time: obj.message.snooze_time,
                                     snooze_chime: obj.message.snooze_chime,
                                     snooze_homebase: obj.message.snooze_homebase,
                                     snooze_motion: obj.message.snooze_motion,
                                 });
-                                if (obj.callback)
-                                    this.sendTo(obj.from, obj.command, {
-                                        sended: true,
-                                        result: "snooze command sended"
-                                    }, obj.callback);
+                                if (obj.callback) {
+                                    this.sendTo(
+                                        obj.from,
+                                        obj.command,
+                                        {
+                                            sended: true, // because of back compatibility
+                                            sent: true,
+                                            result: 'snooze command sent',
+                                        },
+                                        obj.callback,
+                                    );
+                                }
                             } else {
-                                if (obj.callback)
-                                    this.sendTo(obj.from, obj.command, {
-                                        sended: false,
-                                        result: "snooze command not supported by specified device"
-                                    }, obj.callback);
+                                if (obj.callback) {
+                                    this.sendTo(
+                                        obj.from,
+                                        obj.command,
+                                        {
+                                            sended: false, // because of back compatibility
+                                            sent: false,
+                                            result: 'snooze command not supported by specified device',
+                                        },
+                                        obj.callback,
+                                    );
+                                }
                             }
                         } catch (error) {
                             if (error instanceof StationNotFoundError) {
-                                if (obj.callback)
-                                    this.sendTo(obj.from, obj.command, {
-                                        sended: false,
-                                        result: "snooze command not sended because specified station doesn't exists"
-                                    }, obj.callback);
+                                if (obj.callback) {
+                                    this.sendTo(
+                                        obj.from,
+                                        obj.command,
+                                        {
+                                            sended: false, // because of back compatibility
+                                            sent: false,
+                                            result: "snooze command not sent because specified station doesn't exists",
+                                        },
+                                        obj.callback,
+                                    );
+                                }
                             } else if (error instanceof DeviceNotFoundError) {
-                                if (obj.callback)
-                                    this.sendTo(obj.from, obj.command, {
-                                        sended: false,
-                                        result: "snooze command not sended because specified device doesn't exists"
-                                    }, obj.callback);
+                                if (obj.callback) {
+                                    this.sendTo(
+                                        obj.from,
+                                        obj.command,
+                                        {
+                                            sended: false, // because of back compatibility
+                                            sent: false,
+                                            result: "snooze command not sent because specified device doesn't exists",
+                                        },
+                                        obj.callback,
+                                    );
+                                }
                             } else {
                                 throw error;
                             }
                         }
                     } else {
-                        if (obj.callback)
-                            this.sendTo(obj.from, obj.command, {
-                                sended: false,
-                                result: "snooze command not sended because some required parameters are missing"
-                            }, obj.callback);
+                        if (obj.callback) {
+                            this.sendTo(
+                                obj.from,
+                                obj.command,
+                                {
+                                    sended: false, // because of back compatibility
+                                    sent: false,
+                                    result: 'snooze command not sent because some required parameters are missing',
+                                },
+                                obj.callback,
+                            );
+                        }
                     }
-                } else if (obj.command === "chime") {
+                } else if (obj.command === 'chime') {
                     this.log.debug(`snooze command - message: ${JSON.stringify(obj.message)}`);
-                    if (typeof obj.message === "object" &&
-                        typeof obj.message.station_sn === "string" && obj.message.station_sn !== "" &&
-                        (obj.message.ringtone === undefined || typeof obj.message.ringtone === "number")) {
+                    if (
+                        typeof obj.message === 'object' &&
+                        typeof obj.message.station_sn === 'string' &&
+                        obj.message.station_sn !== '' &&
+                        (obj.message.ringtone === undefined || typeof obj.message.ringtone === 'number')
+                    ) {
                         try {
                             const station = await this.eufy.getStation(obj.message.station_sn);
 
                             if (station.hasCommand(CommandName.StationChime)) {
-                                await station.chimeHomebase(obj.message.ringtone !== undefined && typeof obj.message.ringtone === "number" ? obj.message.ringtone : 0);
-                                if (obj.callback)
-                                    this.sendTo(obj.from, obj.command, {
-                                        sended: true,
-                                        result: "chime command sended"
-                                    }, obj.callback);
+                                station.chimeHomebase(
+                                    obj.message.ringtone !== undefined && typeof obj.message.ringtone === 'number'
+                                        ? obj.message.ringtone
+                                        : 0,
+                                );
+                                if (obj.callback) {
+                                    this.sendTo(
+                                        obj.from,
+                                        obj.command,
+                                        {
+                                            sended: true, // because of back compatibility
+                                            sent: true,
+                                            result: 'chime command sent',
+                                        },
+                                        obj.callback,
+                                    );
+                                }
                             } else {
-                                if (obj.callback)
-                                    this.sendTo(obj.from, obj.command, {
-                                        sended: false,
-                                        result: "chime command not supported by specified station"
-                                    }, obj.callback);
+                                if (obj.callback) {
+                                    this.sendTo(
+                                        obj.from,
+                                        obj.command,
+                                        {
+                                            sended: false, // because of back compatibility
+                                            sent: false,
+                                            result: 'chime command not supported by specified station',
+                                        },
+                                        obj.callback,
+                                    );
+                                }
                             }
 
-                            if (obj.callback)
-                                this.sendTo(obj.from, obj.command, "chime command sended", obj.callback);
+                            if (obj.callback) {
+                                this.sendTo(obj.from, obj.command, 'chime command sent', obj.callback);
+                            }
                         } catch (error) {
                             if (error instanceof StationNotFoundError) {
-                                if (obj.callback)
-                                    this.sendTo(obj.from, obj.command, {
-                                        sended: false,
-                                        result: "snooze command not sended because specified station doesn't exists"
-                                    }, obj.callback);
+                                if (obj.callback) {
+                                    this.sendTo(
+                                        obj.from,
+                                        obj.command,
+                                        {
+                                            sended: false, // because of back compatibility
+                                            sent: false,
+                                            result: "snooze command not sent because specified station doesn't exists",
+                                        },
+                                        obj.callback,
+                                    );
+                                }
                             } else {
                                 throw error;
                             }
                         }
                     }
-                } else if (obj.command === "pollRefresh") {
+                } else if (obj.command === 'pollRefresh') {
                     this.log.debug(`pollRefresh command`);
                     await this.eufy.refreshCloudData();
 
-                    if (obj.callback)
-                        this.sendTo(obj.from, obj.command, {
-                            sended: true,
-                            result: "pollRefresh command sended"
-                        }, obj.callback);
+                    if (obj.callback) {
+                        this.sendTo(
+                            obj.from,
+                            obj.command,
+                            {
+                                sended: true, // because of back compatibility
+                                sent: true,
+                                result: 'pollRefresh command sent',
+                            },
+                            obj.callback,
+                        );
+                    }
                 } else {
                     const errorMessage = `Received unknown message: ${JSON.stringify(obj.message)}`;
                     this.log.warn(errorMessage);
-                    if (obj.callback)
-                        this.sendTo(obj.from, obj.command, {
-                            sended: false,
-                            result: errorMessage
-                        }, obj.callback);
+                    if (obj.callback) {
+                        this.sendTo(
+                            obj.from,
+                            obj.command,
+                            {
+                                sended: false, // because of back compatibility
+                                sent: false,
+                                result: errorMessage,
+                            },
+                            obj.callback,
+                        );
+                    }
                 }
             } catch (error) {
-                const errorMessage = `Error during processing of received message: ${error instanceof Error ? `${error.name} - ${error.message}` : error }`;
+                const errorMessage = `Error during processing of received message: ${error instanceof Error ? `${error.name} - ${error.message}` : (error as Error)}`;
                 this.log.error(errorMessage);
-                if (obj.callback)
-                    this.sendTo(obj.from, obj.command, {
-                        sended: false,
-                        result: errorMessage
-                    }, obj.callback);
+                if (obj.callback) {
+                    this.sendTo(
+                        obj.from,
+                        obj.command,
+                        {
+                            sended: false, // because of back compatibility
+                            sent: false,
+                            result: errorMessage,
+                        },
+                        obj.callback,
+                    );
+                }
             }
         }
     }
@@ -843,28 +1062,36 @@ export class euSec extends utils.Adapter {
         const state: ioBroker.StateCommon = {
             name: property.label!,
             type: property.type,
-            role: "state",
+            role: 'state',
             read: property.readable,
             write: property.writeable,
-            def: property.type === "object" && typeof property.default === "object" ? JSON.stringify(property.default) : property.default
+            def:
+                property.type === 'object' && typeof property.default === 'object'
+                    ? JSON.stringify(property.default)
+                    : property.default,
         };
         switch (property.type) {
-            case "number": {
+            case 'number': {
                 const numberProperty = property as PropertyMetadataNumeric;
                 state.min = numberProperty.min;
                 state.max = numberProperty.max;
                 state.states = numberProperty.states;
                 state.unit = numberProperty.unit;
                 state.step = numberProperty.steps;
-                state.role = RoleMapping[property.name] !== undefined ? RoleMapping[property.name] : "value";
+                state.role = RoleMapping[property.name] !== undefined ? RoleMapping[property.name] : 'value';
                 break;
             }
-            case "string": {
-                state.role = RoleMapping[property.name] !== undefined ? RoleMapping[property.name] : "text";
+            case 'string': {
+                state.role = RoleMapping[property.name] !== undefined ? RoleMapping[property.name] : 'text';
                 break;
             }
-            case "boolean": {
-                state.role = RoleMapping[property.name] !== undefined ? RoleMapping[property.name] : (property.writeable ? "switch.enable" : "state");
+            case 'boolean': {
+                state.role =
+                    RoleMapping[property.name] !== undefined
+                        ? RoleMapping[property.name]
+                        : property.writeable
+                          ? 'switch.enable'
+                          : 'state';
                 break;
             }
         }
@@ -903,7 +1130,7 @@ export class euSec extends utils.Adapter {
                 }
             } else {
                 await this.setObjectNotExistsAsync(id, {
-                    type: "state",
+                    type: 'state',
                     common: state,
                     native: {
                         key: property.key,
@@ -913,54 +1140,62 @@ export class euSec extends utils.Adapter {
                 });
             }
             const value = device.getPropertyValue(property.name);
-            if (value !== undefined)
-                await setStateChangedAsync(this as unknown as ioBroker.Adapter, id, (property.type === "string" || property.type === "object") && typeof value === "object" ? JSON.stringify(value) : value);
+            if (value !== undefined) {
+                await setStateChangedAsync(
+                    this,
+                    id,
+                    (property.type === 'string' || property.type === 'object') && typeof value === 'object'
+                        ? JSON.stringify(value)
+                        : value,
+                );
+            }
         }
     }
 
     private async onDeviceAdded(device: Device): Promise<void> {
         this.logger.debug(`onDeviceAdded - device: ${device.getSerial()}`);
 
-        await this.setObjectNotExistsAsync(device.getStateID("", 0), {
-            type: "channel",
+        await this.setObjectNotExistsAsync(device.getStateID('', 0), {
+            type: 'channel',
             common: {
-                name: device.getStateChannel()
+                name: device.getStateChannel(),
             },
             native: {},
         });
 
-        await this.setObjectNotExistsAsync(device.getStateID("", 1), {
-            type: "device",
+        await this.setObjectNotExistsAsync(device.getStateID('', 1), {
+            type: 'device',
             common: {
-                name: device.getName()
+                name: device.getName(),
             },
             native: {},
         });
 
         const metadata = device.getPropertiesMetadata();
-        for(const property of Object.values(metadata)) {
-            if (property.name !== PropertyName.DevicePicture)
-                this.createAndSetState(device, property);
+        for (const property of Object.values(metadata)) {
+            if (property.name !== PropertyName.DevicePicture) {
+                await this.createAndSetState(device, property);
+            }
         }
 
         if (device.hasProperty(PropertyName.DevicePicture)) {
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.PICTURE_URL), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Picture URL",
-                    type: "string",
-                    role: "url",
+                    name: 'Picture URL',
+                    type: 'string',
+                    role: 'url',
                     read: true,
                     write: false,
                 },
                 native: {},
             });
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.PICTURE_HTML), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Picture HTML image",
-                    type: "string",
-                    role: "html",
+                    name: 'Picture HTML image',
+                    type: 'string',
+                    role: 'html',
                     read: true,
                     write: false,
                 },
@@ -970,22 +1205,22 @@ export class euSec extends utils.Adapter {
 
         if (device.hasCommand(CommandName.DeviceTriggerAlarmSound)) {
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.TRIGGER_ALARM_SOUND), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Trigger Alarm Sound",
-                    type: "boolean",
-                    role: "button.start",
+                    name: 'Trigger Alarm Sound',
+                    type: 'boolean',
+                    role: 'button.start',
                     read: false,
                     write: true,
                 },
                 native: {},
             });
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.RESET_ALARM_SOUND), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Reset Alarm Sound",
-                    type: "boolean",
-                    role: "button.start",
+                    name: 'Reset Alarm Sound',
+                    type: 'boolean',
+                    role: 'button.start',
                     read: false,
                     write: true,
                 },
@@ -994,55 +1229,55 @@ export class euSec extends utils.Adapter {
         }
         if (device.hasCommand(CommandName.DevicePanAndTilt)) {
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.PAN_LEFT), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Pan Left",
-                    type: "boolean",
-                    role: "button.start",
+                    name: 'Pan Left',
+                    type: 'boolean',
+                    role: 'button.start',
                     read: false,
                     write: true,
                 },
                 native: {},
             });
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.PAN_RIGHT), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Pan Right",
-                    type: "boolean",
-                    role: "button.start",
+                    name: 'Pan Right',
+                    type: 'boolean',
+                    role: 'button.start',
                     read: false,
                     write: true,
                 },
                 native: {},
             });
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.ROTATE_360), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Rotate 360°",
-                    type: "boolean",
-                    role: "button.start",
+                    name: 'Rotate 360°',
+                    type: 'boolean',
+                    role: 'button.start',
                     read: false,
                     write: true,
                 },
                 native: {},
             });
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.TILT_UP), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Tilt Up",
-                    type: "boolean",
-                    role: "button.start",
+                    name: 'Tilt Up',
+                    type: 'boolean',
+                    role: 'button.start',
                     read: false,
                     write: true,
                 },
                 native: {},
             });
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.TILT_DOWN), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Tilt Down",
-                    type: "boolean",
-                    role: "button.start",
+                    name: 'Tilt Down',
+                    type: 'boolean',
+                    role: 'button.start',
                     read: false,
                     write: true,
                 },
@@ -1051,11 +1286,11 @@ export class euSec extends utils.Adapter {
         }
         if (device.hasCommand(CommandName.DeviceLockCalibration)) {
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.CALIBRATE), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Calibrate Lock",
-                    type: "boolean",
-                    role: "button.start",
+                    name: 'Calibrate Lock',
+                    type: 'boolean',
+                    role: 'button.start',
                     read: false,
                     write: true,
                 },
@@ -1064,11 +1299,11 @@ export class euSec extends utils.Adapter {
         }
         if (device.hasCommand(CommandName.DeviceUnlock)) {
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.UNLOCK), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Unlock",
-                    type: "boolean",
-                    role: "button.start",
+                    name: 'Unlock',
+                    type: 'boolean',
+                    role: 'button.start',
                     read: false,
                     write: true,
                 },
@@ -1077,11 +1312,11 @@ export class euSec extends utils.Adapter {
         }
         if (device.hasCommand(CommandName.DeviceSetDefaultAngle)) {
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.SET_DEFAULT_ANGLE), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Set Default Angle",
-                    type: "boolean",
-                    role: "button.start",
+                    name: 'Set Default Angle',
+                    type: 'boolean',
+                    role: 'button.start',
                     read: false,
                     write: true,
                 },
@@ -1090,11 +1325,11 @@ export class euSec extends utils.Adapter {
         }
         if (device.hasCommand(CommandName.DeviceSetPrivacyAngle)) {
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.SET_PRIVACY_ANGLE), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Set Default Angle",
-                    type: "boolean",
-                    role: "button.start",
+                    name: 'Set Default Angle',
+                    type: 'boolean',
+                    role: 'button.start',
                     read: false,
                     write: true,
                 },
@@ -1103,11 +1338,11 @@ export class euSec extends utils.Adapter {
         }
         if (device.hasCommand(CommandName.DeviceCalibrate)) {
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.CALIBRATE), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Calibrate",
-                    type: "boolean",
-                    role: "button.start",
+                    name: 'Calibrate',
+                    type: 'boolean',
+                    role: 'button.start',
                     read: false,
                     write: true,
                 },
@@ -1116,11 +1351,11 @@ export class euSec extends utils.Adapter {
         }
         if (device.hasCommand(CommandName.DeviceOpen)) {
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.OPEN_BOX), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Open Box",
-                    type: "boolean",
-                    role: "button.start",
+                    name: 'Open Box',
+                    type: 'boolean',
+                    role: 'button.start',
                     read: false,
                     write: true,
                 },
@@ -1130,11 +1365,11 @@ export class euSec extends utils.Adapter {
         if (device.hasCommand(CommandName.DeviceStartLivestream)) {
             // Start Stream
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.START_STREAM), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Start stream",
-                    type: "boolean",
-                    role: "button.start",
+                    name: 'Start stream',
+                    type: 'boolean',
+                    role: 'button.start',
                     read: false,
                     write: true,
                 },
@@ -1143,11 +1378,11 @@ export class euSec extends utils.Adapter {
 
             // Stop Stream
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.STOP_STREAM), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Stop stream",
-                    type: "boolean",
-                    role: "button.stop",
+                    name: 'Stop stream',
+                    type: 'boolean',
+                    role: 'button.stop',
                     read: false,
                     write: true,
                 },
@@ -1156,11 +1391,11 @@ export class euSec extends utils.Adapter {
 
             // Livestream URL
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.LIVESTREAM), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Livestream URL",
-                    type: "string",
-                    role: "url",
+                    name: 'Livestream URL',
+                    type: 'string',
+                    role: 'url',
                     read: true,
                     write: false,
                 },
@@ -1169,11 +1404,11 @@ export class euSec extends utils.Adapter {
 
             // Livestream RTSP URL
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Livestream RTSP URL",
-                    type: "string",
-                    role: "url",
+                    name: 'Livestream RTSP URL',
+                    type: 'string',
+                    role: 'url',
                     read: true,
                     write: false,
                 },
@@ -1184,13 +1419,13 @@ export class euSec extends utils.Adapter {
         if (device.hasProperty(PropertyName.DeviceRTSPStream)) {
             // RTSP Stream URL
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.RTSP_STREAM_URL), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "RTSP stream URL",
-                    type: "string",
-                    role: "url",
+                    name: 'RTSP stream URL',
+                    type: 'string',
+                    role: 'url',
                     read: true,
-                    write: false
+                    write: false,
                 },
                 native: {},
             });
@@ -1242,40 +1477,45 @@ export class euSec extends utils.Adapter {
         }*/
     }
 
-    private async onDeviceRemoved(device: Device): Promise<void> {
-        this.delObjectAsync(device.getStateID("", 0), { recursive: true }).catch((error) => {
+    private onDeviceRemoved(device: Device): void {
+        this.delObjectAsync(device.getStateID('', 0), { recursive: true }).catch(error => {
             this.logger.error(`Error deleting states of removed device`, error);
         });
-        removeFiles(this as unknown as ioBroker.Adapter, device.getStationSerial(), DataLocation.LAST_EVENT, device.getSerial()).catch((error) => {
+        removeFiles(
+            this as unknown as ioBroker.Adapter,
+            device.getStationSerial(),
+            DataLocation.LAST_EVENT,
+            device.getSerial(),
+        ).catch(error => {
             this.logger.error(`Error deleting fs contents of removed device`, error);
         });
     }
 
     private async onStationAdded(station: Station): Promise<void> {
-        this.subscribeStates(`${station.getStateID("", 0)}.*`);
+        this.subscribeStates(`${station.getStateID('', 0)}.*`);
 
-        await this.setObjectNotExistsAsync(station.getStateID("", 0), {
-            type: "device",
+        await this.setObjectNotExistsAsync(station.getStateID('', 0), {
+            type: 'device',
             common: {
-                name: station.getName()
+                name: station.getName(),
             },
             native: {},
         });
 
-        await this.setObjectNotExistsAsync(station.getStateID("", 1), {
-            type: "channel",
+        await this.setObjectNotExistsAsync(station.getStateID('', 1), {
+            type: 'channel',
             common: {
-                name: station.getStateChannel()
+                name: station.getStateChannel(),
             },
             native: {},
         });
 
         await this.setObjectNotExistsAsync(station.getStateID(StationStateID.CONNECTION), {
-            type: "state",
+            type: 'state',
             common: {
-                name: "Connection",
-                type: "boolean",
-                role: "indicator.connection",
+                name: 'Connection',
+                type: 'boolean',
+                role: 'indicator.connection',
                 read: true,
                 write: false,
             },
@@ -1284,18 +1524,18 @@ export class euSec extends utils.Adapter {
         await this.setStateAsync(station.getStateID(StationStateID.CONNECTION), { val: false, ack: true });
 
         const metadata = station.getPropertiesMetadata();
-        for(const property of Object.values(metadata)) {
-            this.createAndSetState(station, property);
+        for (const property of Object.values(metadata)) {
+            await this.createAndSetState(station, property);
         }
 
         // Reboot station
         if (station.hasCommand(CommandName.StationReboot)) {
             await this.setObjectNotExistsAsync(station.getStateID(StationStateID.REBOOT), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Reboot station",
-                    type: "boolean",
-                    role: "button.start",
+                    name: 'Reboot station',
+                    type: 'boolean',
+                    role: 'button.start',
                     read: false,
                     write: true,
                 },
@@ -1305,22 +1545,22 @@ export class euSec extends utils.Adapter {
         // Alarm Sound
         if (station.hasCommand(CommandName.StationTriggerAlarmSound)) {
             await this.setObjectNotExistsAsync(station.getStateID(StationStateID.TRIGGER_ALARM_SOUND), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Trigger Alarm Sound",
-                    type: "boolean",
-                    role: "button.start",
+                    name: 'Trigger Alarm Sound',
+                    type: 'boolean',
+                    role: 'button.start',
                     read: false,
                     write: true,
                 },
                 native: {},
             });
             await this.setObjectNotExistsAsync(station.getStateID(StationStateID.RESET_ALARM_SOUND), {
-                type: "state",
+                type: 'state',
                 common: {
-                    name: "Reset Alarm Sound",
-                    type: "boolean",
-                    role: "button.start",
+                    name: 'Reset Alarm Sound',
+                    type: 'boolean',
+                    role: 'button.start',
                     read: false,
                     write: true,
                 },
@@ -1329,11 +1569,11 @@ export class euSec extends utils.Adapter {
         }
     }
 
-    private async onStationRemoved(station: Station): Promise<void> {
-        this.delObjectAsync(station.getStateID("", 0), { recursive: true }).catch((error) => {
+    private onStationRemoved(station: Station): void {
+        this.delObjectAsync(station.getStateID('', 0), { recursive: true }).catch(error => {
             this.logger.error(`Error deleting states of removed station`, error);
         });
-        this.delFileAsync(this.namespace, station.getSerial()).catch((error) => {
+        this.delFileAsync(this.namespace, station.getSerial()).catch(error => {
             this.logger.error(`Error deleting fs contents of removed station`, error);
         });
     }
@@ -1367,7 +1607,7 @@ export class euSec extends utils.Adapter {
         }
     }*/
 
-    private async handlePushNotification(message: PushMessage): Promise<void> {
+    private handlePushNotification(message: PushMessage): void {
         try {
             if (message.device_sn !== undefined) {
                 //TODO: Deactivated because the decryption of the download has changed.
@@ -1380,50 +1620,50 @@ export class euSec extends utils.Adapter {
             if (error instanceof DeviceNotFoundError) {
                 //Do nothing
             } else {
-                this.logger.error("Handling push notification - Error", error);
+                this.logger.error('Handling push notification - Error', error);
             }
         }
     }
 
     private async onConnect(): Promise<void> {
-        await this.setObjectNotExistsAsync("info", {
-            type: "channel",
+        await this.setObjectNotExistsAsync('info', {
+            type: 'channel',
             common: {
-                name: "info"
+                name: 'info',
             },
             native: {},
         });
-        await this.setObjectNotExistsAsync("info.connection", {
-            type: "state",
+        await this.setObjectNotExistsAsync('info.connection', {
+            type: 'state',
             common: {
-                name: "Global connection",
-                type: "boolean",
-                role: "indicator.connection",
+                name: 'Global connection',
+                type: 'boolean',
+                role: 'indicator.connection',
                 read: true,
                 write: false,
             },
             native: {},
         });
-        await this.setStateAsync("info.connection", { val: true, ack: true });
+        await this.setStateAsync('info.connection', { val: true, ack: true });
 
         const stations = await this.eufy.getStations();
         const stationSerials: string[] = [];
-        for(const station of stations) {
+        for (const station of stations) {
             stationSerials.push(station.getSerial());
         }
         const devices = await this.eufy.getDevices();
         const deviceSerials: string[] = [];
-        for(const device of devices) {
+        for (const device of devices) {
             deviceSerials.push(device.getSerial());
         }
 
         // Delete obsolete stations
         try {
             const allDevices = await this.getDevicesAsync();
-            const reg = new RegExp(`^${this.namespace}\.[0-9A-Z]+$`);
+            const reg = new RegExp(`^${this.namespace}\\.[0-9A-Z]+$`);
             for (const id of allDevices) {
                 if (id._id.match(reg)) {
-                    const serial = id._id.replace(`${this.namespace}.`, "");
+                    const serial = id._id.replace(`${this.namespace}.`, '');
                     if (!stationSerials.includes(serial)) {
                         await this.delObjectAsync(id._id, { recursive: true });
                     }
@@ -1436,14 +1676,18 @@ export class euSec extends utils.Adapter {
         // Delete obsolete devices
         try {
             const allDevices = await this.getDevicesAsync();
-            const reg = new RegExp(`^${this.namespace}\.[0-9A-Z]+\.[a-z]+\.[0-9A-Z]+$`);
+            const reg = new RegExp(`^${this.namespace}\\.[0-9A-Z]+\\.[a-z]+\\.[0-9A-Z]+$`);
             for (const id of allDevices) {
                 if (id._id.match(reg)) {
-                    const values = id._id.split(".");
+                    const values = id._id.split('.');
                     const stateChannel = values[3];
                     const serial = values[4];
-                    if (!deviceSerials.includes(serial) ||
-                        (deviceSerials.includes(serial) && devices[deviceSerials.indexOf(serial)].getStateChannel() !== "unknown" && stateChannel === "unknown")) {
+                    if (
+                        !deviceSerials.includes(serial) ||
+                        (deviceSerials.includes(serial) &&
+                            devices[deviceSerials.indexOf(serial)].getStateChannel() !== 'unknown' &&
+                            stateChannel === 'unknown')
+                    ) {
                         await this.delObjectAsync(id._id, { recursive: true });
                     }
                 }
@@ -1454,12 +1698,12 @@ export class euSec extends utils.Adapter {
 
         // Delete obsolete properties
         try {
-            const all = await this.getStatesAsync("*");
+            const all = await this.getStatesAsync('*');
             if (all) {
-                Object.keys(all).forEach(async (stateid) => {
+                Object.keys(all).forEach(async stateid => {
                     const object = await this.getObjectAsync(stateid);
                     if (object?.native?.name !== undefined) {
-                        const tmp = stateid.split(".");
+                        const tmp = stateid.split('.');
                         if (tmp.length >= 5) {
                             const stationSerial = tmp[2];
                             const deviceSerial = tmp[4];
@@ -1469,12 +1713,15 @@ export class euSec extends utils.Adapter {
                                 try {
                                     const device = await this.eufy.getDevice(deviceSerial);
                                     if (!device.hasProperty(object.native.name)) {
-                                        this.delObjectAsync(stateid);
+                                        await this.delObjectAsync(stateid);
                                     }
                                 } catch (error) {
                                     if (error instanceof DeviceNotFoundError) {
+                                        // ignore
                                     } else {
-                                        this.log.error(`Delete obsolete properties ERROR - device - ${JSON.stringify(error)}`);
+                                        this.log.error(
+                                            `Delete obsolete properties ERROR - device - ${JSON.stringify(error)}`,
+                                        );
                                     }
                                 }
                             } else {
@@ -1482,12 +1729,15 @@ export class euSec extends utils.Adapter {
                                 try {
                                     const station = await this.eufy.getStation(stationSerial);
                                     if (!station.hasProperty(object.native.name)) {
-                                        this.delObjectAsync(stateid);
+                                        await this.delObjectAsync(stateid);
                                     }
                                 } catch (error) {
                                     if (error instanceof StationNotFoundError) {
+                                        // ignore
                                     } else {
-                                        this.log.error(`Delete obsolete properties ERROR - station - ${JSON.stringify(error)}`);
+                                        this.log.error(
+                                            `Delete obsolete properties ERROR - station - ${JSON.stringify(error)}`,
+                                        );
                                     }
                                 }
                             }
@@ -1501,16 +1751,20 @@ export class euSec extends utils.Adapter {
 
         // Delete obsolete directories/files
         try {
-            const contents = await this.readDirAsync(this.namespace, "");
-            for (const content of contents.filter((fn) => fn.file.match("^T[0-9A-Z]+$") !== null && fn.isDir)) {
+            const contents = await this.readDirAsync(this.namespace, '');
+            for (const content of contents.filter(fn => fn.file.match('^T[0-9A-Z]+$') !== null && fn.isDir)) {
                 if (!stationSerials.includes(content.file)) {
                     await this.delFileAsync(this.namespace, content.file);
                 } else {
                     const dirContents = await this.readDirAsync(this.namespace, content.file);
-                    for (const dir of dirContents.filter((fn) => Object.values(DataLocation).includes(fn.file) && fn.isDir)) {
+                    for (const dir of dirContents.filter(
+                        fn => Object.values(DataLocation).includes(fn.file) && fn.isDir,
+                    )) {
                         const files = await this.readDirAsync(this.namespace, path.join(content.file, dir.file));
                         let deletedFiles = 0;
-                        for (const file of files.filter((fn) => !deviceSerials.includes(fn.file.substring(0, 16)) && !fn.isDir)) {
+                        for (const file of files.filter(
+                            fn => !deviceSerials.includes(fn.file.substring(0, 16)) && !fn.isDir,
+                        )) {
                             await this.delFileAsync(this.namespace, path.join(content.file, dir.file, file.file));
                             deletedFiles++;
                         }
@@ -1521,12 +1775,12 @@ export class euSec extends utils.Adapter {
                 }
             }
         } catch (error) {
-            this.log.error(`Delete obsolete directories/files ERROR - ${error}`);
+            this.log.error(`Delete obsolete directories/files ERROR - ${error as Error}`);
         }
     }
 
     private async onClose(): Promise<void> {
-        await this.setStateAsync("info.connection", { val: false, ack: true }).catch();
+        await this.setStateAsync('info.connection', { val: false, ack: true }).catch();
     }
 
     public getPersistentData(): PersistentData {
@@ -1534,127 +1788,157 @@ export class euSec extends utils.Adapter {
     }
 
     private async onPushConnect(): Promise<void> {
-        await this.setObjectNotExistsAsync("info", {
-            type: "channel",
+        await this.setObjectNotExistsAsync('info', {
+            type: 'channel',
             common: {
-                name: "info"
+                name: 'info',
             },
             native: {},
         });
-        await this.setObjectNotExistsAsync("info.push_connection", {
-            type: "state",
+        await this.setObjectNotExistsAsync('info.push_connection', {
+            type: 'state',
             common: {
-                name: "Push notification connection",
-                type: "boolean",
-                role: "indicator.connection",
+                name: 'Push notification connection',
+                type: 'boolean',
+                role: 'indicator.connection',
                 read: true,
                 write: false,
             },
             native: {},
         });
-        await this.setStateAsync("info.push_connection", { val: true, ack: true });
+        await this.setStateAsync('info.push_connection', { val: true, ack: true });
     }
 
     private async onPushClose(): Promise<void> {
-        await this.setObjectNotExistsAsync("info", {
-            type: "channel",
+        await this.setObjectNotExistsAsync('info', {
+            type: 'channel',
             common: {
-                name: "info"
+                name: 'info',
             },
             native: {},
         });
-        await this.setObjectNotExistsAsync("info.push_connection", {
-            type: "state",
+        await this.setObjectNotExistsAsync('info.push_connection', {
+            type: 'state',
             common: {
-                name: "Push notification connection",
-                type: "boolean",
-                role: "indicator.connection",
+                name: 'Push notification connection',
+                type: 'boolean',
+                role: 'indicator.connection',
                 read: true,
                 write: false,
             },
             native: {},
         });
-        await this.setStateAsync("info.push_connection", { val: false, ack: true });
+        await this.setStateAsync('info.push_connection', { val: false, ack: true });
     }
 
     private async onMQTTConnect(): Promise<void> {
-        await this.setObjectNotExistsAsync("info", {
-            type: "channel",
+        await this.setObjectNotExistsAsync('info', {
+            type: 'channel',
             common: {
-                name: "info"
+                name: 'info',
             },
             native: {},
         });
-        await this.setObjectNotExistsAsync("info.mqtt_connection", {
-            type: "state",
+        await this.setObjectNotExistsAsync('info.mqtt_connection', {
+            type: 'state',
             common: {
-                name: "MQTT connection",
-                type: "boolean",
-                role: "indicator.connection",
+                name: 'MQTT connection',
+                type: 'boolean',
+                role: 'indicator.connection',
                 read: true,
                 write: false,
             },
             native: {},
         });
-        await this.setStateAsync("info.mqtt_connection", { val: true, ack: true });
+        await this.setStateAsync('info.mqtt_connection', { val: true, ack: true });
     }
 
     private async onMQTTClose(): Promise<void> {
-        await this.setObjectNotExistsAsync("info", {
-            type: "channel",
+        await this.setObjectNotExistsAsync('info', {
+            type: 'channel',
             common: {
-                name: "info"
+                name: 'info',
             },
             native: {},
         });
-        await this.setObjectNotExistsAsync("info.mqtt_connection", {
-            type: "state",
+        await this.setObjectNotExistsAsync('info.mqtt_connection', {
+            type: 'state',
             common: {
-                name: "MQTT connection",
-                type: "boolean",
-                role: "indicator.connection",
+                name: 'MQTT connection',
+                type: 'boolean',
+                role: 'indicator.connection',
                 read: true,
                 write: false,
             },
             native: {},
         });
-        await this.setStateAsync("info.mqtt_connection", { val: false, ack: true });
+        await this.setStateAsync('info.mqtt_connection', { val: false, ack: true });
     }
 
-    private async onStationCommandResult(station: Station, result: CommandResult): Promise<void> {
-        if ((result.return_code !== 0 && result.command_type !== CommandType.P2P_QUERY_STATUS_IN_LOCK && result.command_type !== CommandType.CMD_STORAGE_INFO_HB3 && result.command_type !== CommandType.CMD_SDINFO_EX) ||
-            (result.return_code !== 0 && result.return_code !== ErrorCode.ERROR_DEV_BUSY && result.command_type === CommandType.CMD_STORAGE_INFO_HB3)) {
-            this.logger.error(`Station: ${station.getSerial()} command ${CommandType[result.command_type]} failed with error: ${ErrorCode[result.return_code]} (${result.return_code})`);
-        } else if (result.return_code !== 0 && result.return_code !== TFCardStatus.REMOVE && result.return_code !== TFCardStatus.BUSY && result.command_type === CommandType.CMD_SDINFO_EX) {
-            this.logger.error(`Station: ${station.getSerial()} command ${CommandType[result.command_type]} failed with error: ${TFCardStatus[result.return_code]} (${result.return_code})`);
+    private onStationCommandResult(station: Station, result: CommandResult): void {
+        if (
+            (result.return_code !== 0 &&
+                result.command_type !== CommandType.P2P_QUERY_STATUS_IN_LOCK &&
+                result.command_type !== CommandType.CMD_STORAGE_INFO_HB3 &&
+                result.command_type !== CommandType.CMD_SDINFO_EX) ||
+            (result.return_code !== 0 &&
+                result.return_code !== ErrorCode.ERROR_DEV_BUSY &&
+                result.command_type === CommandType.CMD_STORAGE_INFO_HB3)
+        ) {
+            this.logger.error(
+                `Station: ${station.getSerial()} command ${CommandType[result.command_type]} failed with error: ${ErrorCode[result.return_code]} (${result.return_code})`,
+            );
+        } else if (
+            result.return_code !== 0 &&
+            result.return_code !== TFCardStatus.REMOVE &&
+            result.return_code !== TFCardStatus.BUSY &&
+            result.command_type === CommandType.CMD_SDINFO_EX
+        ) {
+            this.logger.error(
+                `Station: ${station.getSerial()} command ${CommandType[result.command_type]} failed with error: ${TFCardStatus[result.return_code]} (${result.return_code})`,
+            );
         }
     }
 
     private async onStationPropertyChanged(station: Station, name: string, value: PropertyValue): Promise<void> {
-        const states = await this.getStatesAsync(`${station.getStateID("", 1)}.*`);
+        const states = await this.getStatesAsync(`${station.getStateID('', 1)}.*`);
         for (const state in states) {
             const obj = await this.getObjectAsync(state);
             if (obj) {
                 if (obj.native.name !== undefined && obj.native.name === name) {
-                    await setStateChangedAsync(this as unknown as ioBroker.Adapter, state, (obj.common.type === "string" || obj.common.type === "object") && typeof value === "object" ? JSON.stringify(value) : value);
+                    await setStateChangedAsync(
+                        this,
+                        state,
+                        (obj.common.type === 'string' || obj.common.type === 'object') && typeof value === 'object'
+                            ? JSON.stringify(value)
+                            : value,
+                    );
                     return;
                 }
             }
         }
-        this.logger.debug(`onStationPropertyChanged(): Property "${name}" not implemented in this adapter (station: ${station.getSerial()} value: ${JSON.stringify(value)})`);
+        this.logger.debug(
+            `onStationPropertyChanged(): Property "${name}" not implemented in this adapter (station: ${station.getSerial()} value: ${JSON.stringify(value)})`,
+        );
     }
 
     private async onDevicePropertyChanged(device: Device, name: string, value: PropertyValue): Promise<void> {
-        const states = await this.getStatesAsync(`${device.getStateID("", 1)}.*`);
+        const states = await this.getStatesAsync(`${device.getStateID('', 1)}.*`);
         for (const state in states) {
             const obj = await this.getObjectAsync(state);
             if (obj) {
                 if (obj.native.name !== undefined && obj.native.name === name) {
-                    await setStateChangedAsync(this as unknown as ioBroker.Adapter, state, (obj.common.type === "string" || obj.common.type === "object") && typeof value === "object" ? JSON.stringify(value) : value);
-                    switch(name) {
+                    await setStateChangedAsync(
+                        this,
+                        state,
+                        (obj.common.type === 'string' || obj.common.type === 'object') && typeof value === 'object'
+                            ? JSON.stringify(value)
+                            : value,
+                    );
+                    switch (name) {
                         case PropertyName.DeviceRTSPStream:
-                            if (value as boolean === false) {
-                                this.delStateAsync(device.getStateID(DeviceStateID.RTSP_STREAM_URL));
+                            if ((value as boolean) === false) {
+                                await this.delStateAsync(device.getStateID(DeviceStateID.RTSP_STREAM_URL));
                             }
                             break;
                     }
@@ -1667,19 +1951,55 @@ export class euSec extends utils.Adapter {
                 const picture = value as Picture;
                 const fileName = `${device.getSerial()}.${picture.type.ext}`;
                 const filePath = path.join(device.getStationSerial(), DataLocation.LAST_EVENT);
-                if (!await this.fileExistsAsync(this.namespace, filePath)) {
+                if (!(await this.fileExistsAsync(this.namespace, filePath))) {
                     await this.mkdirAsync(this.namespace, filePath);
                 }
                 await this.writeFileAsync(this.namespace, path.join(filePath, fileName), picture.data);
 
-                await this.setStateAsync(device.getStateID(DeviceStateID.PICTURE_URL), `/files/${this.namespace}/${device.getStationSerial()}/${DataLocation.LAST_EVENT}/${device.getSerial()}.${picture.type.ext}`, true);
-                await setStateChangedAsync(this as unknown as ioBroker.Adapter, device.getStateID(DeviceStateID.PICTURE_HTML), getImageAsHTML(picture.data, picture.type.mime));
+                await this.setStateAsync(
+                    device.getStateID(DeviceStateID.PICTURE_URL),
+                    `/files/${this.namespace}/${device.getStationSerial()}/${DataLocation.LAST_EVENT}/${device.getSerial()}.${picture.type.ext}`,
+                    true,
+                );
+                await setStateChangedAsync(
+                    this,
+                    device.getStateID(DeviceStateID.PICTURE_HTML),
+                    getImageAsHTML(picture.data, picture.type.mime),
+                );
             } catch (err) {
                 const error = ensureError(err);
-                this.logger.error("onDevicePropertyChanged - Property picture - Error", error);
+                this.logger.error('onDevicePropertyChanged - Property picture - Error', error);
             }
         } else {
-            this.logger.debug(`onDevicePropertyChanged(): Property "${name}" not implemented in this adapter (device: ${device.getSerial()} value: ${JSON.stringify(value)})`);
+            this.logger.debug(
+                `onDevicePropertyChanged(): Property "${name}" not implemented in this adapter (device: ${device.getSerial()} value: ${JSON.stringify(value)})`,
+            );
+        }
+    }
+
+    /**
+     * Tells whether a device streams at the "Auto" quality, where the camera is free to change the
+     * resolution mid-stream. The numeric value of "Auto" is not the same for every device family,
+     * so it is resolved through the state label of the property metadata.
+     *
+     * @param device The device to check
+     * @returns true if the streaming quality is one of the "Auto" settings
+     */
+    private isVideoStreamingQualityAuto(device: Device): boolean {
+        if (!device.hasProperty(PropertyName.DeviceVideoStreamingQuality)) {
+            return false;
+        }
+        try {
+            const metadata = device.getPropertyMetadata(
+                PropertyName.DeviceVideoStreamingQuality,
+            ) as PropertyMetadataNumeric;
+            const value = device.getPropertyValue(PropertyName.DeviceVideoStreamingQuality);
+            const label = metadata?.states?.[value as number];
+            return typeof label === 'string' && label.startsWith(VIDEO_STREAMING_QUALITY_AUTO_LABEL);
+        } catch (error) {
+            // Only feeds a warning - it must never keep a livestream from starting.
+            this.logger.debug(`Device: ${device.getSerial()} - Could not determine the video streaming quality`, error);
+            return false;
         }
     }
 
@@ -1690,22 +2010,27 @@ export class euSec extends utils.Adapter {
 
             if (station.isConnected() || station.isEnergySavingDevice()) {
                 if (!station.isLiveStreaming(device)) {
-                    if (device.hasProperty(PropertyName.DeviceVideoStreamingQuality) &&
-                        device.getPropertyValue(PropertyName.DeviceVideoStreamingQuality) === VIDEO_STREAMING_QUALITY_AUTO) {
+                    if (this.isVideoStreamingQualityAuto(device)) {
                         // Measured on a T84A1: 2048x1536 -> 800x600 -> 1600x1200 within 20 seconds.
                         // Every switch is a new SPS, and go2rtc does not hand out a new MSE init
                         // segment for it, so browsers keep decoding against the old one.
-                        this.logger.warn(`The video streaming quality of device ${device_sn} is set to "Auto". The camera may change the resolution while the stream is running, which browsers using MSE cannot follow (green picture or artifacts). Set a fixed quality if you see this.`);
+                        this.logger.warn(
+                            `The video streaming quality of device ${device_sn} is set to "Auto". The camera may change the resolution while the stream is running, which browsers using MSE cannot follow (green picture or artifacts). Set a fixed quality if you see this.`,
+                        );
                     }
-                    this.eufy.startStationLivestream(device_sn);
+                    await this.eufy.startStationLivestream(device_sn);
                 } else {
-                    this.logger.warn(`The stream for the device ${device_sn} cannot be started, because it is already streaming!`);
+                    this.logger.warn(
+                        `The stream for the device ${device_sn} cannot be started, because it is already streaming!`,
+                    );
                 }
             } else {
-                this.logger.warn(`The stream for the device ${device_sn} cannot be started, because there is no connection to station ${station.getSerial()}!`);
+                this.logger.warn(
+                    `The stream for the device ${device_sn} cannot be started, because there is no connection to station ${station.getSerial()}!`,
+                );
             }
         } catch (error) {
-            this.logger.error("Start livestream - Error", error);
+            this.logger.error('Start livestream - Error', error);
         }
     }
 
@@ -1715,45 +2040,82 @@ export class euSec extends utils.Adapter {
             const station = await this.eufy.getStation(device.getStationSerial());
             if (device.isCamera()) {
                 const camera = device as Camera;
-                if (await this.eufy.isStationConnected(device.getStationSerial()) && station.isLiveStreaming(camera)) {
+                if (
+                    (await this.eufy.isStationConnected(device.getStationSerial())) &&
+                    station.isLiveStreaming(camera)
+                ) {
                     await this.eufy.stopStationLivestream(device_sn);
                 } else {
-                    this.logger.warn(`The stream for the device ${device_sn} cannot be stopped, because it isn't streaming!`);
+                    this.logger.warn(
+                        `The stream for the device ${device_sn} cannot be stopped, because it isn't streaming!`,
+                    );
                 }
             }
-
         } catch (error) {
-            this.logger.error("Stop livestream - Error", error);
+            this.logger.error('Stop livestream - Error', error);
         }
     }
 
-    private async onStationLivestreamStart(station: Station, device: Device, metadata: StreamMetadata, videostream: Readable, audiostream: Readable): Promise<void> {
+    private async onStationLivestreamStart(
+        station: Station,
+        device: Device,
+        metadata: StreamMetadata,
+        videostream: Readable,
+        audiostream: Readable,
+    ): Promise<void> {
         try {
-            this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM), { val: `${this.config.https ? "https" : "http"}://${this.config.hostname}:${this.config.go2rtc_api_port}/stream.html?src=${device.getSerial()}`, ack: true });
-            this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP), { val: `rtsp://${this.config.hostname}:${this.config.go2rtc_rtsp_port}/${device.getSerial()}`, ack: true });
+            await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM), {
+                val: `${this.config.https ? 'https' : 'http'}://${this.config.hostname}:${this.config.go2rtc_api_port}/stream.html?src=${device.getSerial()}`,
+                ack: true,
+            });
+            await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP), {
+                val: `rtsp://${this.config.hostname}:${this.config.go2rtc_rtsp_port}/${device.getSerial()}`,
+                ack: true,
+            });
             //await ffmpegStreamToGo2rtc(this.config, this.namespace, device.getSerial(), metadata, videostream, audiostream, this.logger);
-            const results = await streamToGo2rtc(device.getSerial(), videostream, audiostream, this.logger, this.config, this.namespace, metadata);
+            const results = await streamToGo2rtc(
+                device.getSerial(),
+                videostream,
+                audiostream,
+                this.logger,
+                this.config,
+                this.namespace,
+                metadata,
+            );
             if (streamToGo2rtcFailed(results)) {
                 // streamToGo2rtc() settles instead of rejecting, so a broken pipeline never reached
-                // the catch below and the camera kept streaming into nothing until it timed out.
-                this.logger.warn(`Station: ${station.getSerial()} Device: ${device.getSerial()} - Streaming to go2rtc failed - Stopping livestream...`);
-                await this.eufy.stopStationLivestream(device.getSerial())
-                    .catch((error) => {
-                        this.logger.error(`Station: ${station.getSerial()} Device: ${device.getSerial()} - Error during stopping livestream...`, error);
-                    });
-            }
-        } catch(error) {
-            this.logger.error(`Station: ${station.getSerial()} Device: ${device.getSerial()} - Error - Stopping livestream...`, error);
-            this.eufy.stopStationLivestream(device.getSerial())
-                .catch(async (error) => {
-                    this.logger.error(`Station: ${station.getSerial()} Device: ${device.getSerial()} - Error during stopping livestream...`, error);
+                // the catch below, and the camera kept streaming into nothing until it timed out.
+                this.logger.warn(
+                    `Station: ${station.getSerial()} Device: ${device.getSerial()} - Streaming to go2rtc failed - Stopping livestream...`,
+                );
+                await this.eufy.stopStationLivestream(device.getSerial()).catch(error => {
+                    this.logger.error(
+                        `Station: ${station.getSerial()} Device: ${device.getSerial()} - Error during stopping livestream...`,
+                        error,
+                    );
                 });
+            }
+        } catch (error) {
+            this.logger.error(
+                `Station: ${station.getSerial()} Device: ${device.getSerial()} - Error - Stopping livestream...`,
+                error,
+            );
+            this.eufy.stopStationLivestream(device.getSerial()).catch(error => {
+                this.logger.error(
+                    `Station: ${station.getSerial()} Device: ${device.getSerial()} - Error during stopping livestream...`,
+                    error,
+                );
+            });
         }
     }
 
-    private onStationLivestreamStop(_station: Station, device: Device): void {
-        this.delStateAsync(device.getStateID(DeviceStateID.LIVESTREAM));
-        this.delStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP));
+    private async onStationLivestreamStop(_station: Station, device: Device): Promise<void> {
+        try {
+            await this.delStateAsync(device.getStateID(DeviceStateID.LIVESTREAM));
+            await this.delStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP));
+        } catch (error) {
+            this.log.error(`Cannot delete: ${error as Error}`);
+        }
     }
 
     /*private async onStationDownloadFinish(_station: Station, _device: Device): Promise<void> {
@@ -1811,17 +2173,17 @@ export class euSec extends utils.Adapter {
         }
     }*/
 
-    private onStationRTSPUrl(station: Station, device: Device, value: string): void {
-        setStateChangedAsync(this as unknown as ioBroker.Adapter, device.getStateID(DeviceStateID.RTSP_STREAM_URL), value);
+    private async onStationRTSPUrl(station: Station, device: Device, value: string): Promise<void> {
+        await setStateChangedAsync(this, device.getStateID(DeviceStateID.RTSP_STREAM_URL), value);
     }
 
     private async onStationConnect(station: Station): Promise<void> {
         await this.setObjectNotExistsAsync(station.getStateID(StationStateID.CONNECTION), {
-            type: "state",
+            type: 'state',
             common: {
-                name: "Connection",
-                type: "boolean",
-                role: "indicator.connection",
+                name: 'Connection',
+                type: 'boolean',
+                role: 'indicator.connection',
                 read: true,
                 write: false,
             },
@@ -1832,11 +2194,11 @@ export class euSec extends utils.Adapter {
 
     private async onStationClose(station: Station): Promise<void> {
         await this.setObjectNotExistsAsync(station.getStateID(StationStateID.CONNECTION), {
-            type: "state",
+            type: 'state',
             common: {
-                name: "Connection",
-                type: "boolean",
-                role: "indicator.connection",
+                name: 'Connection',
+                type: 'boolean',
+                role: 'indicator.connection',
                 read: true,
                 write: false,
             },
@@ -1844,12 +2206,16 @@ export class euSec extends utils.Adapter {
         });
         await this.setStateAsync(station.getStateID(StationStateID.CONNECTION), { val: false, ack: true });
 
-        // A station that dropped cannot be feeding go2rtc any more. Leaving the livestream states
+        // A station that dropped cannot be feeding go2rtc anymore. Leaving the livestream states
         // in place points every consumer at a producer that no longer exists.
         try {
             for (const device of await this.eufy.getDevicesFromStation(station.getSerial())) {
-                await this.delStateAsync(device.getStateID(DeviceStateID.LIVESTREAM)).catch(() => { /* not streaming */ });
-                await this.delStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP)).catch(() => { /* not streaming */ });
+                await this.delStateAsync(device.getStateID(DeviceStateID.LIVESTREAM)).catch(() => {
+                    /* not streaming */
+                });
+                await this.delStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP)).catch(() => {
+                    /* not streaming */
+                });
             }
         } catch (error) {
             this.logger.error(`Station: ${station.getSerial()} - Error while clearing livestream states`, error);
@@ -1857,22 +2223,25 @@ export class euSec extends utils.Adapter {
     }
 
     private onTFARequest(): void {
-        this.logger.warn(`Two factor authentication request received, please enter valid verification code in state ${this.namespace}.verify_code`);
-        this.verify_code= true;
+        this.logger.warn(
+            `Two factor authentication request received, please enter valid verification code in state ${this.namespace}.verify_code`,
+        );
+        this.verify_code = true;
     }
 
-    private onCaptchaRequest(captchaId: string, captcha: string): void {
+    private async onCaptchaRequest(captchaId: string, captcha: string): Promise<void> {
         this.captchaId = captchaId;
-        this.logger.warn(`Captcha authentication request received, please enter valid captcha in state ${this.namespace}.captcha`);
+        this.logger.warn(
+            `Captcha authentication request received, please enter valid captcha in state ${this.namespace}.captcha`,
+        );
         this.logger.warn(`Captcha: <img src="${captcha}">`);
-        this.setStateAsync("received_captcha_html", { val: `<img src="${captcha}">`, ack: true });
+        await this.setStateAsync('received_captcha_html', { val: `<img src="${captcha}">`, ack: true });
     }
-
 }
 
 if (require.main !== module) {
     // Export the constructor in compact mode
-    module.exports = (options: Partial<utils.AdapterOptions> | undefined) => new euSec(options);
+    module.exports = (options: Partial<AdapterOptions> | undefined) => new euSec(options);
 } else {
     // otherwise start the instance directly
     (() => new euSec())();

@@ -1,184 +1,195 @@
-import net from "node:net";
-import path from "node:path";
-import ffmpeg from "@bropat/fluent-ffmpeg";
-import pathToFfmpeg from "ffmpeg-for-homebridge";
-import { Readable } from "node:stream";
-import { StreamMetadata, AudioCodec, VideoCodec } from "eufy-security-client";
-import { tmpdir } from "node:os";
-import fse from "fs-extra";
+import net from 'node:net';
+import path from 'node:path';
+import ffmpeg from '@bropat/fluent-ffmpeg';
+import pathToFfmpeg from 'ffmpeg-for-homebridge';
+import type { Readable } from 'node:stream';
+import { type StreamMetadata, AudioCodec, VideoCodec } from 'eufy-security-client';
+import { tmpdir } from 'node:os';
+import fse from 'fs-extra';
 
-import stream from "node:stream";
-import {pipeline as streamPipeline} from "node:stream/promises";
+import stream from 'node:stream';
+import { pipeline as streamPipeline } from 'node:stream/promises';
 
-import { ioBrokerLogger } from "./log";
-import { isRegularStreamEnd } from "./go2rtc";
-import { getShortUrl, lowestUnusedNumber } from "./utils";
+import type { ioBrokerLogger } from './log';
+import { isRegularStreamEnd } from './go2rtc';
+import { getShortUrl, lowestUnusedNumber } from './utils';
 
 class UniversalStream {
-
     public url: string;
     private static socks = new Set<number>();
-    private server: net.Server;
-    private sock_id: number;
+    private readonly server: net.Server;
+    private readonly sock_id: number;
 
-    constructor (namespace: string, onSocket: ((socket: net.Socket) => void) | undefined) {
-        let sockpath = "";
+    constructor(namespace: string, onSocket: ((socket: net.Socket) => void) | undefined) {
+        let sockPath = '';
 
         const unique_sock_id = lowestUnusedNumber([...UniversalStream.socks], 1);
         UniversalStream.socks.add(unique_sock_id);
         this.sock_id = unique_sock_id;
 
-        if (process.platform === "win32") {
-            const pipePrefix = "\\\\.\\pipe\\";
+        if (process.platform === 'win32') {
+            const pipePrefix = '\\\\.\\pipe\\';
             const pipeName = `node-webrtc.${namespace}.${unique_sock_id}.sock`;
 
-            sockpath = path.join(pipePrefix, pipeName);
-            this.url = sockpath;
-        }
-        else {
+            sockPath = path.join(pipePrefix, pipeName);
+            this.url = sockPath;
+        } else {
             const pipeName = `${namespace}.${unique_sock_id}.sock`;
-            sockpath = path.join(tmpdir(), pipeName);
-            this.url = "unix:" + sockpath;
+            sockPath = path.join(tmpdir(), pipeName);
+            this.url = `unix:${sockPath}`;
 
             try {
-                if (fse.existsSync(sockpath))
-                    fse.unlinkSync(sockpath);
-            } catch(error) {
+                if (fse.existsSync(sockPath)) {
+                    fse.unlinkSync(sockPath);
+                }
+            } catch {
+                // ignore
             }
         }
 
         this.server = net.createServer(onSocket);
-        this.server.listen(sockpath);
-        this.server.on("error", () => {});
+        this.server.listen(sockPath);
+        this.server.on('error', () => {});
     }
 
     public close(): void {
-        if (this.server)
-            this.server.close();
+        this.server?.close();
         UniversalStream.socks.delete(this.sock_id);
     }
-
 }
 
-export const StreamInput = function(namespace: string, stream: NodeJS.ReadableStream): UniversalStream {
-    return new UniversalStream(namespace, (socket: net.Socket) => stream.pipe(socket, { end: true }).on("error", (_error) => {
-        //TODO: log error
-    }));
-}
+export const StreamInput = function (namespace: string, stream: NodeJS.ReadableStream): UniversalStream {
+    return new UniversalStream(namespace, (socket: net.Socket) =>
+        stream.pipe(socket, { end: true }).on('error', _error => {
+            // TODO: log error
+        }),
+    );
+};
 
-export const StreamOutput = function(namespace: string, stream: NodeJS.WritableStream): UniversalStream {
-    return new UniversalStream(namespace, (socket: net.Socket) => socket.pipe(stream, { end: true }).on("error", (_error) => {
-        //TODO: log error
-    }));
-}
+export const StreamOutput = function (namespace: string, stream: NodeJS.WritableStream): UniversalStream {
+    return new UniversalStream(namespace, (socket: net.Socket) =>
+        socket.pipe(stream, { end: true }).on('error', _error => {
+            // TODO: log error
+        }),
+    );
+};
 
-export const ffmpegPreviewImage = (config: ioBroker.AdapterConfig, input:string, output: string, log: ioBrokerLogger, skip_seconds = 2.0): Promise<void> => {
+export const ffmpegPreviewImage = (
+    config: ioBroker.AdapterConfig,
+    input: string,
+    output: string,
+    log: ioBrokerLogger,
+    skip_seconds = 2.0,
+): Promise<void> => {
     return new Promise((resolve, reject) => {
         try {
             if (pathToFfmpeg) {
-                // @ts-expect-error old code
                 ffmpeg.setFfmpegPath(pathToFfmpeg);
 
                 ffmpeg()
                     .withProcessOptions({
-                        detached: true
+                        detached: true,
                     })
-                    .addOptions([
-                        `-ss ${skip_seconds}`,
-                        "-frames:v 1"
-                    ])
+                    .addOptions([`-ss ${skip_seconds}`, '-frames:v 1'])
                     .input(input)
-                    .inputFormat("hls")
-                    .outputFormat("image2")
+                    .inputFormat('hls')
+                    .outputFormat('image2')
                     .output(output)
-                    .on("error", function(err, stdout, stderr) {
+                    .on('error', function (err: Error, stdout, stderr) {
                         log.error(`ffmpegPreviewImage(): An error occurred: ${err.message}`);
                         log.error(`ffmpegPreviewImage(): ffmpeg output:\n${stdout}`);
                         log.error(`ffmpegPreviewImage(): ffmpeg stderr:\n${stderr}`);
                         reject(err);
                     })
-                    .on("end", () => {
-                        log.debug("ffmpegPreviewImage(): Preview image generated!");
+                    .on('end', () => {
+                        log.debug('ffmpegPreviewImage(): Preview image generated!');
                         resolve();
                     })
                     .run();
             } else {
-                reject(new Error("ffmpeg binary not found"));
+                reject(new Error('ffmpeg binary not found'));
             }
         } catch (error) {
-            log.error(`ffmpegPreviewImage(): Error: ${error}`);
-            reject(error);
+            log.error(`ffmpegPreviewImage(): Error: ${error as Error}`);
+            reject(new Error((error as Error).toString()));
         }
     });
-}
+};
 
-export const ffmpegStreamToHls = (config: ioBroker.AdapterConfig, namespace: string, metadata: StreamMetadata, videoStream: Readable, audioStream: Readable, output: string, log: ioBrokerLogger): Promise<void> => {
+export const ffmpegStreamToHls = (
+    config: ioBroker.AdapterConfig,
+    namespace: string,
+    metadata: StreamMetadata,
+    videoStream: Readable,
+    audioStream: Readable,
+    output: string,
+    log: ioBrokerLogger,
+): Promise<void> => {
     return new Promise((resolve, reject) => {
         try {
             if (pathToFfmpeg) {
-                // @ts-expect-error old code
                 ffmpeg.setFfmpegPath(pathToFfmpeg);
 
-                videoStream.on("error", (error) => {
-                    log.error("ffmpegStreamToHls(): Videostream Error", error);
+                videoStream.on('error', error => {
+                    log.error('ffmpegStreamToHls(): Videostream Error', error);
                 });
 
-                audioStream.on("error", (error) => {
-                    log.error("ffmpegStreamToHls(): Audiostream Error", error);
+                audioStream.on('error', error => {
+                    log.error('ffmpegStreamToHls(): Audiostream Error', error);
                 });
 
                 const uVideoStream = StreamInput(namespace, videoStream);
                 const uAudioStream = StreamInput(namespace, audioStream);
 
-                let videoFormat = "h264";
-                let audioFormat = "";
+                let videoFormat = 'h264';
+                let audioFormat = '';
                 const options: string[] = [
-                    "-hls_init_time 0",
-                    "-hls_time 2",
-                    "-hls_segment_type mpegts",
+                    '-hls_init_time 0',
+                    '-hls_time 2',
+                    '-hls_segment_type mpegts',
                     //"-start_number 1",
-                    "-sc_threshold 0",
+                    '-sc_threshold 0',
                     `-g ${metadata.videoFPS}`,
-                    "-fflags genpts+nobuffer+flush_packets",
+                    '-fflags genpts+nobuffer+flush_packets',
                     //"-flush_packets 1",
-                    "-hls_playlist_type event"
+                    '-hls_playlist_type event',
                     //"-hls_flags split_by_time"
                 ];
 
-                switch(metadata.videoCodec) {
+                switch (metadata.videoCodec) {
                     case VideoCodec.H264:
-                        videoFormat = "h264";
+                        videoFormat = 'h264';
                         break;
                     case VideoCodec.H265:
-                        videoFormat = "hevc";
+                        videoFormat = 'hevc';
                         break;
                 }
 
-                switch(metadata.audioCodec) {
+                switch (metadata.audioCodec) {
                     case AudioCodec.AAC:
-                        audioFormat = "aac";
+                        audioFormat = 'aac';
                         break;
                 }
 
                 const command = ffmpeg()
                     .withProcessOptions({
-                        detached: true
+                        detached: true,
                     })
                     .input(uVideoStream.url)
                     .inputFormat(videoFormat)
                     .inputFps(metadata.videoFPS);
-                if (audioFormat !== "") {
-                    command.input(uAudioStream.url)
-                        .inputFormat(audioFormat)
-                        .videoCodec("copy")
-                        .audioCodec("copy");
-                    options.push("-absf aac_adtstoasc");
+                if (audioFormat !== '') {
+                    command.input(uAudioStream.url).inputFormat(audioFormat).videoCodec('copy').audioCodec('copy');
+                    options.push('-absf aac_adtstoasc');
                 } else {
-                    log.warn(`ffmpegStreamToHls(): Not support audio codec or unknown audio codec (${AudioCodec[metadata.audioCodec]})`);
+                    log.warn(
+                        `ffmpegStreamToHls(): Not support audio codec or unknown audio codec (${AudioCodec[metadata.audioCodec]})`,
+                    );
                 }
-                command.output(output)
+                command
+                    .output(output)
                     .addOptions(options)
-                    .on("error", function(err, stdout, stderr) {
+                    .on('error', function (err: Error, stdout, stderr) {
                         log.error(`ffmpegStreamToHls(): An error occurred: ${err.message}`);
                         log.error(`ffmpegStreamToHls(): ffmpeg output:\n${stdout}`);
                         log.error(`ffmpegStreamToHls(): ffmpeg stderr:\n${stderr}`);
@@ -186,36 +197,43 @@ export const ffmpegStreamToHls = (config: ioBroker.AdapterConfig, namespace: str
                         uAudioStream.close();
                         reject(err);
                     })
-                    .on("end", () => {
-                        log.debug("ffmpegStreamToHls(): Processing finished!");
+                    .on('end', () => {
+                        log.debug('ffmpegStreamToHls(): Processing finished!');
                         uVideoStream.close();
                         uAudioStream.close();
                         resolve();
                     });
                 command.run();
             } else {
-                reject(new Error("ffmpeg binary not found"));
+                reject(new Error('ffmpeg binary not found'));
             }
         } catch (error) {
-            log.error(`ffmpegStreamToHls(): Error: ${error}`);
-            reject(error);
+            log.error(`ffmpegStreamToHls(): Error: ${error as Error}`);
+            reject(new Error((error as Error).toString()));
         }
     });
-}
+};
 
-export const ffmpegStreamToGo2rtc = (config: ioBroker.AdapterConfig, namespace: string, camera: string, metadata: StreamMetadata, videoStream: Readable, audioStream: Readable, log: ioBrokerLogger): Promise<void> => {
+export const ffmpegStreamToGo2rtc = (
+    config: ioBroker.AdapterConfig,
+    namespace: string,
+    camera: string,
+    metadata: StreamMetadata,
+    videoStream: Readable,
+    audioStream: Readable,
+    log: ioBrokerLogger,
+): Promise<void> => {
     return new Promise((resolve, reject) => {
         try {
             if (pathToFfmpeg) {
-                // @ts-expect-error old code
                 ffmpeg.setFfmpegPath(pathToFfmpeg);
 
-                videoStream.on("error", (error) => {
-                    log.error("ffmpegStreamToGo2rtc(): Videostream Error", error);
+                videoStream.on('error', error => {
+                    log.error('ffmpegStreamToGo2rtc(): Videostream Error', error);
                 });
 
-                audioStream.on("error", (error) => {
-                    log.error("ffmpegStreamToGo2rtc(): Audiostream Error", error);
+                audioStream.on('error', error => {
+                    log.error('ffmpegStreamToGo2rtc(): Audiostream Error', error);
                 });
 
                 //TODO: For debugging purposes
@@ -233,57 +251,61 @@ export const ffmpegStreamToGo2rtc = (config: ioBroker.AdapterConfig, namespace: 
                 const uVideoStream = StreamInput(namespace, videoStream);
                 const uAudioStream = StreamInput(namespace, audioStream);
 
-                let videoFormat = "h264";
-                let audioFormat = "";
+                let videoFormat = 'h264';
+                let audioFormat = '';
                 const options: string[] = [
-                    "-rtsp_transport tcp",
-                    "-sc_threshold 0",
-                    "-fflags genpts+nobuffer+flush_packets",
+                    '-rtsp_transport tcp',
+                    '-sc_threshold 0',
+                    '-fflags genpts+nobuffer+flush_packets',
                     //"-rtpflags latm",
                 ];
 
-                switch(metadata.videoCodec) {
+                switch (metadata.videoCodec) {
                     case VideoCodec.H264:
-                        videoFormat = "h264";
+                        videoFormat = 'h264';
                         break;
                     case VideoCodec.H265:
-                        videoFormat = "hevc";
+                        videoFormat = 'hevc';
                         break;
                 }
 
-                switch(metadata.audioCodec) {
+                switch (metadata.audioCodec) {
                     case AudioCodec.AAC:
-                        audioFormat = "aac";
+                        audioFormat = 'aac';
                         break;
                 }
 
                 const command = ffmpeg()
                     .withProcessOptions({
-                        detached: true
+                        detached: true,
                     })
                     .input(uVideoStream.url)
                     .inputFormat(videoFormat);
-                if (metadata.videoFPS > 0 ) {
+                if (metadata.videoFPS > 0) {
                     options.push(`-g ${metadata.videoFPS}`);
                     command.inputFps(metadata.videoFPS);
                 }
-                command.videoCodec("copy");
-                if (audioFormat !== "") {
-                    command.input(uAudioStream.url)
+                command.videoCodec('copy');
+                if (audioFormat !== '') {
+                    command
+                        .input(uAudioStream.url)
                         .inputFormat(audioFormat)
                         //.audioCodec("copy");
                         //.audioCodec("aac");
-                        .audioCodec("opus");
+                        .audioCodec('opus');
                 } else {
-                    log.warn(`ffmpegStreamToGo2rtc(): Not support audio codec or unknown audio codec (${AudioCodec[metadata.audioCodec]})`);
+                    log.warn(
+                        `ffmpegStreamToGo2rtc(): Not support audio codec or unknown audio codec (${AudioCodec[metadata.audioCodec]})`,
+                    );
                 }
-                command.output(`rtsp://localhost:${config.go2rtc_rtsp_port}/${camera}`)
-                    .outputFormat("rtsp")
+                command
+                    .output(`rtsp://localhost:${config.go2rtc_rtsp_port}/${camera}`)
+                    .outputFormat('rtsp')
                     .addOptions(options)
-                    .on("start", (commandline) => {
+                    .on('start', commandline => {
                         log.debug(`ffmpegStreamToGo2rtc(): commandline: ${commandline}`);
                     })
-                    .on("error", function(err, stdout, stderr) {
+                    .on('error', function (err: Error, stdout, stderr) {
                         log.error(`ffmpegStreamToGo2rtc(): An error occurred: ${err.message}`);
                         log.error(`ffmpegStreamToGo2rtc(): ffmpeg output:\n${stdout}`);
                         log.error(`ffmpegStreamToGo2rtc(): ffmpeg stderr:\n${stderr}`);
@@ -291,69 +313,81 @@ export const ffmpegStreamToGo2rtc = (config: ioBroker.AdapterConfig, namespace: 
                         uAudioStream.close();
                         reject(err);
                     })
-                    .on("end", () => {
-                        log.debug("ffmpegStreamToGo2rtc(): Processing finished!");
+                    .on('end', () => {
+                        log.debug('ffmpegStreamToGo2rtc(): Processing finished!');
                         uVideoStream.close();
                         uAudioStream.close();
                         resolve();
                     });
                 command.run();
             } else {
-                reject(new Error("ffmpeg binary not found"));
+                reject(new Error('ffmpeg binary not found'));
             }
         } catch (error) {
-            log.error(`ffmpegStreamToGo2rtc(): Error: ${error}`);
-            reject(error);
+            log.error(`ffmpegStreamToGo2rtc(): Error: ${error as Error}`);
+            reject(new Error((error as Error).toString()));
         }
     });
-}
+};
 
-export const streamToGo2rtc = async (camera: string, videoStream: Readable, audioStream: Readable, log: ioBrokerLogger, config: ioBroker.AdapterConfig, _namespace: string, _metadata: StreamMetadata): Promise<Array<PromiseSettledResult<void>>> => {
-    const { default: got } = await import("got");
+export const streamToGo2rtc = async (
+    camera: string,
+    videoStream: Readable,
+    audioStream: Readable,
+    log: ioBrokerLogger,
+    config: ioBroker.AdapterConfig,
+    _namespace: string,
+    _metadata: StreamMetadata,
+): Promise<Array<PromiseSettledResult<void>>> => {
+    const { default: got } = await import('got');
     const api = got.extend({
         hooks: {
             beforeError: [
                 error => {
                     const { response, options } = error;
                     const { method, url, prefixUrl } = options;
-                    const shortUrl = getShortUrl(typeof url === "string" ? new URL(url) : url === undefined ? new URL("") : url, typeof prefixUrl === "string" ? prefixUrl : prefixUrl.toString());
+                    const shortUrl = getShortUrl(
+                        typeof url === 'string' ? new URL(url) : url === undefined ? new URL('') : url,
+                        typeof prefixUrl === 'string' ? prefixUrl : prefixUrl.toString(),
+                    );
                     const body = response?.body ? response.body : error.message;
                     error.message = `${error.message} | method: ${method} url: ${shortUrl}`;
                     if (response?.body) {
-                        error.message = `${error.message} body: ${body}`;
+                        // eslint-disable-next-line @typescript-eslint/no-base-to-string
+                        error.message = `${error.message} body: ${typeof body === 'object' ? JSON.stringify(body) : body?.toString()}`;
                     }
                     return error;
-                }
+                },
             ],
-        }
+        },
     });
-    videoStream.on("error", (error) => {
-        log.error("streamToGo2rtc(): Videostream Error", error);
+    videoStream.on('error', error => {
+        log.error('streamToGo2rtc(): Videostream Error', error);
     });
 
-    audioStream.on("error", (error) => {
-        log.error("streamToGo2rtc(): Audiostream Error", error);
+    audioStream.on('error', error => {
+        log.error('streamToGo2rtc(): Audiostream Error', error);
     });
     const ingestUrl = `http://localhost:${config.go2rtc_api_port}/api/stream?dst=${camera}`;
     const results = await Promise.allSettled([
         streamPipeline(
             videoStream,
-            api.stream.post(ingestUrl).on("error", (error: any) => {
+            api.stream.post(ingestUrl).on('error', (error: any) => {
                 if (!isRegularStreamEnd(error)) {
                     log.error(`streamToGo2rtc(): Got Videostream Error: ${error.message}`);
                 }
             }),
-            new stream.PassThrough()
+            new stream.PassThrough(),
         ),
         streamPipeline(
             audioStream,
-            api.stream.post(ingestUrl).on("error", (error: any) => {
+            api.stream.post(ingestUrl).on('error', (error: any) => {
                 if (!isRegularStreamEnd(error)) {
                     log.error(`streamToGo2rtc(): Got Audiostream Error: ${error.message}`);
                 }
             }),
-            new stream.PassThrough()
-        )
+            new stream.PassThrough(),
+        ),
         // Alternative implementation in case of go2rtc audio bitstream isn't working (<= 1.8.5)
         /*new Promise<void>((resolve, reject) => {
             try {
@@ -423,10 +457,10 @@ export const streamToGo2rtc = async (camera: string, videoStream: Readable, audi
     // Without this the rejection is swallowed by allSettled and a dead pipeline stays invisible,
     // while the camera keeps streaming until the maximum livestream duration expires.
     for (const result of results) {
-        if (result.status === "rejected" && !isRegularStreamEnd(result.reason)) {
+        if (result.status === 'rejected' && !isRegularStreamEnd(result.reason)) {
             log.error(`streamToGo2rtc(): Stream to go2rtc failed: ${result.reason}`);
         }
     }
 
     return results;
-}
+};

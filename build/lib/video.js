@@ -43,7 +43,7 @@ var import_ffmpeg_for_homebridge = __toESM(require("ffmpeg-for-homebridge"));
 var import_eufy_security_client = require("eufy-security-client");
 var import_node_os = require("node:os");
 var import_fs_extra = __toESM(require("fs-extra"));
-var import_node_stream2 = __toESM(require("node:stream"));
+var import_node_stream = __toESM(require("node:stream"));
 var import_promises = require("node:stream/promises");
 var import_go2rtc = require("./go2rtc");
 var import_utils = require("./utils");
@@ -53,43 +53,50 @@ class UniversalStream {
   server;
   sock_id;
   constructor(namespace, onSocket) {
-    let sockpath = "";
+    let sockPath = "";
     const unique_sock_id = (0, import_utils.lowestUnusedNumber)([...UniversalStream.socks], 1);
     UniversalStream.socks.add(unique_sock_id);
     this.sock_id = unique_sock_id;
     if (process.platform === "win32") {
       const pipePrefix = "\\\\.\\pipe\\";
       const pipeName = `node-webrtc.${namespace}.${unique_sock_id}.sock`;
-      sockpath = import_node_path.default.join(pipePrefix, pipeName);
-      this.url = sockpath;
+      sockPath = import_node_path.default.join(pipePrefix, pipeName);
+      this.url = sockPath;
     } else {
       const pipeName = `${namespace}.${unique_sock_id}.sock`;
-      sockpath = import_node_path.default.join((0, import_node_os.tmpdir)(), pipeName);
-      this.url = "unix:" + sockpath;
+      sockPath = import_node_path.default.join((0, import_node_os.tmpdir)(), pipeName);
+      this.url = `unix:${sockPath}`;
       try {
-        if (import_fs_extra.default.existsSync(sockpath))
-          import_fs_extra.default.unlinkSync(sockpath);
-      } catch (error) {
+        if (import_fs_extra.default.existsSync(sockPath)) {
+          import_fs_extra.default.unlinkSync(sockPath);
+        }
+      } catch {
       }
     }
     this.server = import_node_net.default.createServer(onSocket);
-    this.server.listen(sockpath);
+    this.server.listen(sockPath);
     this.server.on("error", () => {
     });
   }
   close() {
-    if (this.server)
-      this.server.close();
+    var _a;
+    (_a = this.server) == null ? void 0 : _a.close();
     UniversalStream.socks.delete(this.sock_id);
   }
 }
 const StreamInput = function(namespace, stream2) {
-  return new UniversalStream(namespace, (socket) => stream2.pipe(socket, { end: true }).on("error", (_error) => {
-  }));
+  return new UniversalStream(
+    namespace,
+    (socket) => stream2.pipe(socket, { end: true }).on("error", (_error) => {
+    })
+  );
 };
 const StreamOutput = function(namespace, stream2) {
-  return new UniversalStream(namespace, (socket) => socket.pipe(stream2, { end: true }).on("error", (_error) => {
-  }));
+  return new UniversalStream(
+    namespace,
+    (socket) => socket.pipe(stream2, { end: true }).on("error", (_error) => {
+    })
+  );
 };
 const ffmpegPreviewImage = (config, input, output, log, skip_seconds = 2) => {
   return new Promise((resolve, reject) => {
@@ -98,10 +105,7 @@ const ffmpegPreviewImage = (config, input, output, log, skip_seconds = 2) => {
         import_fluent_ffmpeg.default.setFfmpegPath(import_ffmpeg_for_homebridge.default);
         (0, import_fluent_ffmpeg.default)().withProcessOptions({
           detached: true
-        }).addOptions([
-          `-ss ${skip_seconds}`,
-          "-frames:v 1"
-        ]).input(input).inputFormat("hls").outputFormat("image2").output(output).on("error", function(err, stdout, stderr) {
+        }).addOptions([`-ss ${skip_seconds}`, "-frames:v 1"]).input(input).inputFormat("hls").outputFormat("image2").output(output).on("error", function(err, stdout, stderr) {
           log.error(`ffmpegPreviewImage(): An error occurred: ${err.message}`);
           log.error(`ffmpegPreviewImage(): ffmpeg output:
 ${stdout}`);
@@ -117,7 +121,7 @@ ${stderr}`);
       }
     } catch (error) {
       log.error(`ffmpegPreviewImage(): Error: ${error}`);
-      reject(error);
+      reject(new Error(error.toString()));
     }
   });
 };
@@ -168,7 +172,9 @@ const ffmpegStreamToHls = (config, namespace, metadata, videoStream, audioStream
           command.input(uAudioStream.url).inputFormat(audioFormat).videoCodec("copy").audioCodec("copy");
           options.push("-absf aac_adtstoasc");
         } else {
-          log.warn(`ffmpegStreamToHls(): Not support audio codec or unknown audio codec (${import_eufy_security_client.AudioCodec[metadata.audioCodec]})`);
+          log.warn(
+            `ffmpegStreamToHls(): Not support audio codec or unknown audio codec (${import_eufy_security_client.AudioCodec[metadata.audioCodec]})`
+          );
         }
         command.output(output).addOptions(options).on("error", function(err, stdout, stderr) {
           log.error(`ffmpegStreamToHls(): An error occurred: ${err.message}`);
@@ -191,7 +197,7 @@ ${stderr}`);
       }
     } catch (error) {
       log.error(`ffmpegStreamToHls(): Error: ${error}`);
-      reject(error);
+      reject(new Error(error.toString()));
     }
   });
 };
@@ -240,7 +246,9 @@ const ffmpegStreamToGo2rtc = (config, namespace, camera, metadata, videoStream, 
         if (audioFormat !== "") {
           command.input(uAudioStream.url).inputFormat(audioFormat).audioCodec("opus");
         } else {
-          log.warn(`ffmpegStreamToGo2rtc(): Not support audio codec or unknown audio codec (${import_eufy_security_client.AudioCodec[metadata.audioCodec]})`);
+          log.warn(
+            `ffmpegStreamToGo2rtc(): Not support audio codec or unknown audio codec (${import_eufy_security_client.AudioCodec[metadata.audioCodec]})`
+          );
         }
         command.output(`rtsp://localhost:${config.go2rtc_rtsp_port}/${camera}`).outputFormat("rtsp").addOptions(options).on("start", (commandline) => {
           log.debug(`ffmpegStreamToGo2rtc(): commandline: ${commandline}`);
@@ -265,7 +273,7 @@ ${stderr}`);
       }
     } catch (error) {
       log.error(`ffmpegStreamToGo2rtc(): Error: ${error}`);
-      reject(error);
+      reject(new Error(error.toString()));
     }
   });
 };
@@ -277,11 +285,14 @@ const streamToGo2rtc = async (camera, videoStream, audioStream, log, config, _na
         (error) => {
           const { response, options } = error;
           const { method, url, prefixUrl } = options;
-          const shortUrl = (0, import_utils.getShortUrl)(typeof url === "string" ? new URL(url) : url === void 0 ? new URL("") : url, typeof prefixUrl === "string" ? prefixUrl : prefixUrl.toString());
+          const shortUrl = (0, import_utils.getShortUrl)(
+            typeof url === "string" ? new URL(url) : url === void 0 ? new URL("") : url,
+            typeof prefixUrl === "string" ? prefixUrl : prefixUrl.toString()
+          );
           const body = (response == null ? void 0 : response.body) ? response.body : error.message;
           error.message = `${error.message} | method: ${method} url: ${shortUrl}`;
           if (response == null ? void 0 : response.body) {
-            error.message = `${error.message} body: ${body}`;
+            error.message = `${error.message} body: ${typeof body === "object" ? JSON.stringify(body) : body == null ? void 0 : body.toString()}`;
           }
           return error;
         }
@@ -303,7 +314,7 @@ const streamToGo2rtc = async (camera, videoStream, audioStream, log, config, _na
           log.error(`streamToGo2rtc(): Got Videostream Error: ${error.message}`);
         }
       }),
-      new import_node_stream2.default.PassThrough()
+      new import_node_stream.default.PassThrough()
     ),
     (0, import_promises.pipeline)(
       audioStream,
@@ -312,7 +323,7 @@ const streamToGo2rtc = async (camera, videoStream, audioStream, log, config, _na
           log.error(`streamToGo2rtc(): Got Audiostream Error: ${error.message}`);
         }
       }),
-      new import_node_stream2.default.PassThrough()
+      new import_node_stream.default.PassThrough()
     )
     // Alternative implementation in case of go2rtc audio bitstream isn't working (<= 1.8.5)
     /*new Promise<void>((resolve, reject) => {

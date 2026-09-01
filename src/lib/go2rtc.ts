@@ -1,6 +1,6 @@
 /**
  * Helpers around the go2rtc stream pipelines. Deliberately free of imports so they stay testable:
- * lib/utils.ts pulls in @iobroker/adapter-core and main.ts, which needs a running js-controller.
+ * lib/utils.ts pulls in \@iobroker/adapter-core and main.ts, which needs a running js-controller.
  */
 
 /**
@@ -12,7 +12,7 @@
  */
 export const isRegularStreamEnd = (error: unknown): boolean => {
     const body = (error as { response?: { body?: unknown } })?.response?.body;
-    return typeof body === "string" && body.startsWith("EOF");
+    return typeof body === 'string' && body.startsWith('EOF');
 };
 
 /**
@@ -23,4 +23,4 @@ export const isRegularStreamEnd = (error: unknown): boolean => {
  * @returns true if at least one pipeline broke
  */
 export const streamToGo2rtcFailed = (results: Array<PromiseSettledResult<void>>): boolean =>
-    results.some((result) => result.status === "rejected" && !isRegularStreamEnd(result.reason));
+    results.some(result => result.status === 'rejected' && !isRegularStreamEnd(result.reason));

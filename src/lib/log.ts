@@ -1,7 +1,6 @@
-import { Logger } from "ts-log";
+import type { Logger } from 'ts-log';
 
 export class ioBrokerLogger implements Logger {
-
     private readonly log: ioBroker.Logger;
 
     public constructor(log: ioBroker.Logger) {
@@ -17,14 +16,14 @@ export class ioBrokerLogger implements Logger {
     }
 
     private _getMessage(message?: string, hideTag = false, optionalParams?: any[]): string {
-        const msg = message ? message : "";
+        const msg = message ? message : '';
         const stack = this._getStack();
-        const typeName = stack[0].getTypeName() !== null ? stack[0].getTypeName() : "";
-        const functionName = stack[0].getFunctionName() !== null ? `${stack[0].getFunctionName()}` : "";
-        let tag = "";
-        if (typeName !== "" && !hideTag) {
+        const typeName = stack[0].getTypeName() !== null ? stack[0].getTypeName() : '';
+        const functionName = stack[0].getFunctionName() !== null ? `${stack[0].getFunctionName()}` : '';
+        let tag = '';
+        if (typeName !== '' && !hideTag) {
             tag = `[${typeName}`;
-            if (functionName !== "") {
+            if (functionName !== '') {
                 tag = `${tag}.${functionName}] `;
             } else {
                 tag = `${tag}] `;
@@ -56,5 +55,4 @@ export class ioBrokerLogger implements Logger {
     public error(message?: string, ...optionalParams: any[]): void {
         this.log.error(this._getMessage(message, true, optionalParams));
     }
-
 }

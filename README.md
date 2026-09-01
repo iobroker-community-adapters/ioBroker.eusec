@@ -13,21 +13,21 @@
 
 [![NPM](https://nodei.co/npm/iobroker.eusec.png?downloads=true)](https://nodei.co/npm/iobroker.eusec/)
 
-This is an [ioBroker](https://www.iobroker.net) adapter that uses the [eufy-security-client](https://github.com/bropat/eufy-security-client) library to comunicate with Eufy devices.
+This is an [ioBroker](https://www.iobroker.net) adapter that uses the [eufy-security-client](https://github.com/bropat/eufy-security-client) library to communicate with Eufy devices.
 
 **This project is not affiliated with Anker and Eufy (Eufy Security). It is a personal project that is maintained in spare time.**
 
 ## Description
 
-This adapter allows to control [Eufy security devices](https://us.eufylife.com/collections/security) by connecting to the Eufy cloud servers and local/remote stations.
+This adapter allows you to control [Eufy security devices](https://us.eufylife.com/collections/security) by connecting to the Eufy cloud servers and local/remote stations.
 
 You need to provide your Cloud login credentials. The adapter connects to your cloud account and polls for all device data via HTTPS. Now a local or remote P2P connection to the Eufy stations/devices is also supported. However, a connection to the Eufy Cloud is always a prerequisite.
 
-One Adapter instance will show all devices from one Eufy Cloud account and allows to control them.
+One Adapter instance will show all devices from one Eufy Cloud account and allows you to control them.
 
 ## Documentation
 
-Checkout the documentation [here](https://iobroker-community-adapters.github.io/ioBroker.eusec/).
+Check out the documentation [here](https://iobroker-community-adapters.github.io/ioBroker.eusec/).
 
 ## Known working devices
 
@@ -39,10 +39,10 @@ This adapter would not have been possible without the great work of Patrick Broe
 
 ## IMPORTANT information when upgrading to node.js 22
 
-Adapter 2.0.3 and newer support node.js 22. Prior node.js version require a special setup which became invalid with node.js 22. So when upgrading node.js form any version lower then 22.x.x to node.js 22 please follow these steps:
+Adapter 2.0.3 and newer support node.js 22. Prior node.js versions require a special setup which became invalid with node.js 22. So when upgrading node.js from any version lower than 22.x.x to node.js 22, please follow these steps:
 
 - If you have node.js < 22 and adapter < 2.0.0 installed, please update node.js first and install adapter 2.0.3 afterwards.
-- If you have adapter >= 2.0.0 installed with any node release prio than 22 you MUST reinstall the adapter. A detailled description (in german) is available at our forum (https://forum.iobroker.net/topic/82651/test-adapter-eusec-v2-0-x)
+- If you have adapter >= 2.0.0 installed with any node release prior to 22, you MUST reinstall the adapter. A detailed description (in German) is available at our forum (https://forum.iobroker.net/topic/82651/test-adapter-eusec-v2-0-x)
   
 ## Changelog
 
@@ -54,6 +54,13 @@ Adapter 2.0.3 and newer support node.js 22. Prior node.js version require a spec
 ### **WORK IN PROGRESS**
 - (copilot) Adapter requires node.js >= 22 now
 - (copilot) Adapter requires admin >= 7.7.22 now
+- (@GermanBluefox) Refactoring
+- (@GermanBluefox) Fixed login failing with `Get passport profile - Response code not ok` since the eufy cloud started answering successful requests with code 200 instead of 0 (see [bropat/eufy-security-client#975](https://github.com/bropat/eufy-security-client/pull/975))
+- (typhosj) Fixed livestreaming being broken when go2rtc is configured to use an API port other than 1984, and the eufy livestream is now stopped when streaming into go2rtc fails ([#151](https://github.com/iobroker-community-adapters/ioBroker.eusec/pull/151), [#160](https://github.com/iobroker-community-adapters/ioBroker.eusec/issues/160))
+- (typhosj) go2rtc is now supervised and restarted if it terminates unexpectedly, the livestream states are cleared when a station disconnects, and a warning is logged when a camera streams at "Auto" quality ([#152](https://github.com/iobroker-community-adapters/ioBroker.eusec/pull/152))
+- (@GermanBluefox) The warning about the "Auto" streaming quality now also covers devices where "Auto" is not value 0 (eufyCam 3, Professional models and battery doorbells)
+- (@GermanBluefox) Removed the obsolete CVE-2023-46809 workaround for node.js 20 from the adapter startup
+- (@GermanBluefox) Pinned eufy-security-client to 4.1.1-1 and removed the unused packages mime and @types/ffmpeg-static
 
 ### 2.0.3 (2025-10-26)
 - (mcm1957) Remove fix for CVE-2023-46809 for node.js 22 and newer

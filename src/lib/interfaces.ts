@@ -1,4 +1,3 @@
-
 /*export interface AdapterConfig {
     username: string;
     password: string;
