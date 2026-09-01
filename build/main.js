@@ -641,6 +641,7 @@ class euSec extends import_adapter_core.Adapter {
                     obj.command,
                     {
                       sended: true,
+                      // because of back compatibility
                       sent: true,
                       result: "quickResponse command sent"
                     },
@@ -654,6 +655,7 @@ class euSec extends import_adapter_core.Adapter {
                     obj.command,
                     {
                       sended: false,
+                      // because of back compatibility
                       sent: false,
                       result: "quickResponse command not supported by specified device"
                     },
@@ -669,6 +671,7 @@ class euSec extends import_adapter_core.Adapter {
                     obj.command,
                     {
                       sended: false,
+                      // because of back compatibility
                       sent: false,
                       result: "quickResponse command not sent because specified station doesn't exists"
                     },
@@ -682,6 +685,7 @@ class euSec extends import_adapter_core.Adapter {
                     obj.command,
                     {
                       sended: false,
+                      // because of back compatibility
                       sent: false,
                       result: "quickResponse command not sent because specified device doesn't exists"
                     },
@@ -699,6 +703,7 @@ class euSec extends import_adapter_core.Adapter {
                 obj.command,
                 {
                   sended: false,
+                  // because of back compatibility
                   sent: false,
                   result: "quickResponse command not sent because some required parameters are missing"
                 },
@@ -716,6 +721,7 @@ class euSec extends import_adapter_core.Adapter {
                 obj.command,
                 {
                   sended: true,
+                  // because of back compatibility
                   sent: true,
                   result: voices
                 },
@@ -729,6 +735,7 @@ class euSec extends import_adapter_core.Adapter {
                 obj.command,
                 {
                   sended: false,
+                  // because of back compatibility
                   sent: false,
                   result: "getQuickResponseVoices command not sent because some required parameters are missing"
                 },
@@ -755,6 +762,7 @@ class euSec extends import_adapter_core.Adapter {
                     obj.command,
                     {
                       sended: true,
+                      // because of back compatibility
                       sent: true,
                       result: "snooze command sent"
                     },
@@ -768,6 +776,7 @@ class euSec extends import_adapter_core.Adapter {
                     obj.command,
                     {
                       sended: false,
+                      // because of back compatibility
                       sent: false,
                       result: "snooze command not supported by specified device"
                     },
@@ -783,6 +792,7 @@ class euSec extends import_adapter_core.Adapter {
                     obj.command,
                     {
                       sended: false,
+                      // because of back compatibility
                       sent: false,
                       result: "snooze command not sent because specified station doesn't exists"
                     },
@@ -796,6 +806,7 @@ class euSec extends import_adapter_core.Adapter {
                     obj.command,
                     {
                       sended: false,
+                      // because of back compatibility
                       sent: false,
                       result: "snooze command not sent because specified device doesn't exists"
                     },
@@ -813,6 +824,7 @@ class euSec extends import_adapter_core.Adapter {
                 obj.command,
                 {
                   sended: false,
+                  // because of back compatibility
                   sent: false,
                   result: "snooze command not sent because some required parameters are missing"
                 },
@@ -835,6 +847,7 @@ class euSec extends import_adapter_core.Adapter {
                     obj.command,
                     {
                       sended: true,
+                      // because of back compatibility
                       sent: true,
                       result: "chime command sent"
                     },
@@ -848,6 +861,7 @@ class euSec extends import_adapter_core.Adapter {
                     obj.command,
                     {
                       sended: false,
+                      // because of back compatibility
                       sent: false,
                       result: "chime command not supported by specified station"
                     },
@@ -866,6 +880,7 @@ class euSec extends import_adapter_core.Adapter {
                     obj.command,
                     {
                       sended: false,
+                      // because of back compatibility
                       sent: false,
                       result: "snooze command not sent because specified station doesn't exists"
                     },
@@ -886,6 +901,7 @@ class euSec extends import_adapter_core.Adapter {
               obj.command,
               {
                 sended: true,
+                // because of back compatibility
                 sent: true,
                 result: "pollRefresh command sent"
               },
@@ -901,6 +917,7 @@ class euSec extends import_adapter_core.Adapter {
               obj.command,
               {
                 sended: false,
+                // because of back compatibility
                 sent: false,
                 result: errorMessage
               },
@@ -917,6 +934,7 @@ class euSec extends import_adapter_core.Adapter {
             obj.command,
             {
               sended: false,
+              // because of back compatibility
               sent: false,
               result: errorMessage
             },

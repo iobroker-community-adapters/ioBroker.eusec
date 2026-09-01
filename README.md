@@ -50,8 +50,7 @@ Adapter 2.0.3 and newer support node.js 22. Prior node.js versions require a spe
 	Placeholder for the next version (at the beginning of the line):
 	### **WORK IN PROGRESS**
 -->
-
-### **WORK IN PROGRESS**
+### 3.0.0 (2026-09-01)
 - (copilot) Adapter requires node.js >= 22 now
 - (copilot) Adapter requires admin >= 7.7.22 now
 - (@GermanBluefox) Refactoring
@@ -79,11 +78,6 @@ Adapter 2.0.3 and newer support node.js 22. Prior node.js versions require a spe
 ### 1.3.2 (2024-09-10)
 
 * (bropat) Fixed issue #440
-
-### 1.3.1 (2024-09-08)
-
-* (bropat) Fixed issue #436
-* (bropat) Fixed issue #439
 
 [Older changelogs can be found there](CHANGELOG_OLD.md)
 
