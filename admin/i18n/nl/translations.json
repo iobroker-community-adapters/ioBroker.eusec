@@ -15,7 +15,6 @@
     "Max camera livestream duration (sec)": "Max. Duur livestream camera (sec; 0 = onbeperkt)",
     "General settings": "Algemene instellingen",
     "Hostname": "Hostnaam streaming url",
-    "https": "HTTPS-streaming url",
     "go2rtc settings": "go2rtc instellingen",
     "API port": "API poort",
     "SRTP port": "SRTP poort",

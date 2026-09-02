@@ -15,7 +15,6 @@
     "Max camera livestream duration (sec)": "Максимальна тривалість прямого ефіру з камери (сек; 0 = необмежена)",
     "General settings": "Загальні налаштування",
     "Hostname": "URL-адреса потокової передачі імені хоста",
-    "https": "Адреса потокового передавання HTTPS",
     "go2rtc settings": "Налаштування go2rtc",
     "API port": "Порт API",
     "SRTP port": "Порт SRTP",

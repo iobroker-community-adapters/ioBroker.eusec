@@ -1152,15 +1152,6 @@
             "lg": 3,
             "xl": 3
           },
-          "https": {
-            "type": "checkbox",
-            "label": "HTTPS streaming url",
-            "xs": 12,
-            "sm": 12,
-            "md": 6,
-            "lg": 3,
-            "xl": 3
-          },
           "maxLivestreamDuration": {
             "newLine": true,
             "type": "number",

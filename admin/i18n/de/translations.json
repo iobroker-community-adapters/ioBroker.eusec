@@ -15,7 +15,6 @@
     "Max camera livestream duration (sec)": "Maximale Livestream-Dauer der Kamera (Sek.; 0 = unbegrenzt)",
     "General settings": "Allgemeine Einstellungen",
     "Hostname": "Hostname Streaming-Url",
-    "https": "HTTPS-Streaming-URL",
     "go2rtc settings": "go2rtc Einstellungen",
     "API port": "API Port",
     "SRTP port": "SRTP Port",

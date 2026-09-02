@@ -2065,7 +2065,9 @@ export class euSec extends Adapter {
     ): Promise<void> {
         try {
             await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM), {
-                val: `${this.config.https ? 'https' : 'http'}://${this.config.hostname}:${this.config.go2rtc_api_port}/stream.html?src=${device.getSerial()}`,
+                // Plain http on purpose: the adapter never configures TLS for go2rtc, and go2rtc
+                // ignores api.tls_listen without a certificate, so an https URL could not work.
+                val: `http://${this.config.hostname}:${this.config.go2rtc_api_port}/stream.html?src=${device.getSerial()}`,
                 ack: true,
             });
             await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP), {
