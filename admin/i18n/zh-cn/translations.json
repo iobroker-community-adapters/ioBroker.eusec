@@ -15,7 +15,6 @@
     "Max camera livestream duration (sec)": "相机直播的最大持续时间（秒；0 = 无限）",
     "General settings": "一般设置",
     "Hostname": "主机名流媒体网址",
-    "https": "HTTPS流媒体网址",
     "go2rtc settings": "go2rtc设置",
     "API port": "API端口",
     "SRTP port": "SRTP端口",

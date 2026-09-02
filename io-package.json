@@ -180,8 +180,7 @@
     "go2rtc_webrtc_port": 8555,
     "go2rtc_rtsp_username": "",
     "go2rtc_rtsp_password": "",
-    "hostname": "",
-    "https": false
+    "hostname": ""
   },
   "objects": [],
   "instanceObjects": [

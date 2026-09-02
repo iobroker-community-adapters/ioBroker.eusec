@@ -21,7 +21,6 @@ declare global {
             go2rtc_rtsp_username: string;
             go2rtc_rtsp_password: string;
             hostname: string;
-            https: boolean;
         }
     }
 }
