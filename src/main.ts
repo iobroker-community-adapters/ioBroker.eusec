@@ -52,7 +52,7 @@ import {
 import type { PersistentData } from './lib/interfaces';
 import { ioBrokerLogger } from './lib/log';
 import { applyEufyApiCompatibility } from './lib/eufyApiCompat';
-import { streamToGo2rtcFailed } from './lib/go2rtc';
+import { buildPlayerUrl, streamToGo2rtcFailed } from './lib/go2rtc';
 import { streamToGo2rtc } from './lib/video';
 
 /** Restart backoff for go2rtc: 1s, 2s, 4s ... capped, reset once it stayed up for a while. */
@@ -391,6 +391,10 @@ export class euSec extends Adapter {
                     } = {
                         api: {
                             listen: `:${this.config.go2rtc_api_port}`,
+                            // The livestream player has to be served by go2rtc itself: go2rtc
+                            // answers a WebSocket from a different origin with "403 Forbidden",
+                            // so a page delivered by the web adapter could not play anything.
+                            static_dir: path.join(__dirname, '..', 'www'),
                         },
                         rtsp: {
                             listen: `:${this.config.go2rtc_rtsp_port}`,
@@ -2065,9 +2069,7 @@ export class euSec extends Adapter {
     ): Promise<void> {
         try {
             await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM), {
-                // Plain http on purpose: the adapter never configures TLS for go2rtc, and go2rtc
-                // ignores api.tls_listen without a certificate, so an https URL could not work.
-                val: `http://${this.config.hostname}:${this.config.go2rtc_api_port}/stream.html?src=${device.getSerial()}`,
+                val: buildPlayerUrl(this.config.hostname, this.config.go2rtc_api_port, device.getSerial()),
                 ack: true,
             });
             await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP), {

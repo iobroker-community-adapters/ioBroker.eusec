@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>go2rtc - Stream</title>
+    <style>
+        body {
+            background: black;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            font-family: Arial, Helvetica, sans-serif;
+        }
+
+        html, body {
+            height: 100%;
+            width: 100%;
+        }
+
+        .flex {
+            flex-wrap: wrap;
+            align-content: flex-start;
+            align-items: flex-start;
+        }
+    </style>
+</head>
+<body>
+<script type="module" src="./video-stream.js"></script>
+<script type="module">
+    /*
+     * The stream page of go2rtc, with the defaults that hurt on weak clients like a Fire tablet
+     * replaced. Everything else - the query parameters src, mode, background and width, multiple
+     * streams side by side, the status overlay - behaves exactly as before, so an existing link to
+     * this page keeps working.
+     *
+     * What is different:
+     *   - WebRTC is no longer the preferred mode. Every stream of this adapter is pushed into
+     *     go2rtc, so go2rtc cannot ask the camera for a keyframe and WebRTC starts in the middle of
+     *     a GOP - green blocks and artifacts. onpcvideo() even lets WebRTC take over from MSE once
+     *     it connects. Pass ?mode=webrtc,mse,hls,mjpeg to get the old order back.
+     *   - The picture is pulled back to the live edge when it falls behind. MSE holds a buffer of 15
+     *     seconds and the player moves currentTime only once, when the element is attached, so every
+     *     stall of the client used to add to the delay permanently.
+     *   - A reconnect starts after a second instead of after the 15 of RECONNECT_TIMEOUT, doubling
+     *     up to those 15 seconds while playback does not come back.
+     *
+     * Added query parameters: audio=false (play video only), controls=false (hide the native
+     * controls, so a tap on a touch screen cannot pause the stream), drift=<seconds> (how far the
+     * picture may lag behind the live edge before it is skipped forward, default 1.5).
+     */
+    import './video-stream.js';
+
+    const params = new URLSearchParams(location.search);
+
+    /** Seconds the picture may lag behind the newest buffered frame before it is skipped forward. */
+    const MAX_DRIFT = Number.parseFloat(params.get('drift') || '1.5');
+    /** Delay of the first reconnect. Doubles up to RECONNECT_MAX until playback works again. */
+    const RECONNECT_MIN = 1000;
+    const RECONNECT_MAX = 15000;
+
+    // video-stream.js only registers the element, it exports nothing. Extending the registered class
+    // keeps its status overlay ("loading", the mode, errors) instead of reimplementing it.
+    const VideoStream = customElements.get('video-stream');
+
+    class EusecStream extends VideoStream {
+        oninit() {
+            super.oninit();
+
+            this.video.controls = params.get('controls') !== 'false';
+            this.video.disablePictureInPicture = true;
+
+            this.video.addEventListener('playing', () => {
+                this.RECONNECT_TIMEOUT = RECONNECT_MIN;
+            });
+            this.video.addEventListener('timeupdate', () => this.catchUp());
+        }
+
+        /**
+         * Seeks to the newest buffered frame once the picture has fallen too far behind. Without it
+         * every hiccup of the client decoder turns into delay that is never made up again.
+         */
+        catchUp() {
+            const buffered = this.video.buffered;
+            if (!buffered.length || this.video.seeking || this.video.paused) {
+                return;
+            }
+
+            const live = buffered.end(buffered.length - 1);
+            if (live - this.video.currentTime > MAX_DRIFT) {
+                this.video.currentTime = live - 0.3;
+            }
+        }
+
+        onclose() {
+            const reconnecting = super.onclose();
+            // go2rtc refuses a consumer while no producer exists, so back off instead of hammering
+            // it once per second while the livestream is not running (yet).
+            this.RECONNECT_TIMEOUT = Math.min(this.RECONNECT_TIMEOUT * 2, RECONNECT_MAX);
+            return reconnecting;
+        }
+    }
+
+    customElements.define('eusec-stream', EusecStream);
+
+    // support multiple streams and multiple modes
+    const streams = params.getAll('src');
+    const modes = params.getAll('mode');
+    if (modes.length === 0) modes.push('');
+
+    while (modes.length > streams.length) {
+        streams.push(streams[0]);
+    }
+    while (streams.length > modes.length) {
+        modes.push(modes[0]);
+    }
+
+    if (streams.length > 1) {
+        document.body.className = 'flex';
+    }
+
+    const background = params.get('background') !== 'false';
+    const width = '1 0 ' + (params.get('width') || '320px');
+    // The adapter pushes video and audio into go2rtc over two connections without a common clock, so
+    // their drift can stall the decoder. Dropping the audio track also saves a decoder on the client.
+    const media = params.get('audio') === 'false' ? 'video' : 'video,audio';
+
+    for (let i = 0; i < streams.length; i++) {
+        const video = document.createElement('eusec-stream');
+        video.background = background;
+        video.mode = modes[i] || 'mse,hls,mjpeg';
+        video.media = media;
+        video.RECONNECT_TIMEOUT = RECONNECT_MIN;
+        video.style.flex = width;
+        video.src = new URL('api/ws?src=' + encodeURIComponent(streams[i]), location.href);
+        document.body.appendChild(video);
+    }
+</script>
+</body>
+</html>
