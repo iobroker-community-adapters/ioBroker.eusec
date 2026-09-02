@@ -58,6 +58,8 @@
 </table>
 <script>
     const templates = [
+        // eusec: the "net" link was removed - network.html pulls vis-network from unpkg.com and
+        // stays blank on a host without internet access, so the page is not shipped
         '<a href="stream.html?src={name}">stream</a>',
         '<a href="links.html?src={name}">links</a>',
         '<a href="#" data-name="{name}">delete</a>',

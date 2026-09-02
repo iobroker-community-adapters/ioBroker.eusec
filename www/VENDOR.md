@@ -6,18 +6,21 @@ embedded in the go2rtc binary - once it is set, go2rtc serves nothing of its own
 WebSocket from a different origin with "403 Forbidden" and `/api/stream.mp4`, the only endpoint
 that works cross origin, is refused by Chrome and Edge with `NotSupportedError`.
 
-Everything of go2rtc that is useful in an adapter is shipped along (MIT, AlexxIT/go2rtc), so that
-nothing disappears for anyone who opened these pages before:
+Everything of go2rtc that is useful in an adapter is shipped along, so that nothing disappears for
+anyone who opened these pages before. Those files are MIT licensed, Copyright (c) 2022 Alexey Khit
+(AlexxIT/go2rtc); the full text is in `LICENSE.go2rtc` next to them. `stream.html` is derived from
+the stream page of go2rtc and is covered by the same license.
 
 | File | Origin | Why it is here |
 | --- | --- | --- |
-| `stream.html` | **the adapter** | the page of go2rtc with different defaults, see the comment inside |
+| `stream.html` | **derived** | the page of go2rtc with different defaults, see the comment inside |
 | `video-rtc.js`, `video-stream.js` | unmodified | `stream.html` builds on both |
 | `index.html` | **modified** | the stream list - which cameras exist and whether one is streaming |
 | `main.js` | **modified** | navigation and dark mode of the pages above |
 | `log.html` | unmodified | the go2rtc log over `/api/log`, without shell access to the host |
 | `links.html` | unmodified | the RTSP, HLS, MJPEG and snapshot URL of a camera |
-| `webrtc.html` | unmodified | a WebRTC only viewer - it works, it is just the wrong transport here |
+| `webrtc.html` | unmodified | a WebRTC only viewer - it works, it is just the wrong transport here. No page links to it; it is kept so a bookmark to it still answers |
+| `LICENSE.go2rtc` | **the adapter** | the MIT license of the files above |
 
 ## What was left out, and why
 
@@ -30,7 +33,8 @@ nothing disappears for anyone who opened these pages before:
   page stays blank, and an adapter should not send its users to a third party CDN.
 
 The two modified files carry an `eusec:` comment at the place that was changed: the three nav
-entries in `main.js` and the per stream `net` link in `index.html`. `stream.html` also drops the
+entries in `main.js` and the per stream `net` link in `index.html`. Keep that marker when you carry
+an upstream change over, it is the only thing that shows what was touched. `stream.html` also drops the
 icon and manifest links to `alexxit.github.io` that the original had - three external requests on
 every mount are not what a tablet needs.
 
@@ -46,8 +50,9 @@ for f in links.html webrtc.html log.html video-rtc.js video-stream.js; do
 done
 ```
 
-`stream.html`, `index.html` and `main.js` are **not** overwritten - fetch the originals to a
-temporary file, diff them and carry over what changed upstream. Then check that no page links to a
+`stream.html`, `index.html`, `main.js` and `LICENSE.go2rtc` are **not** overwritten - fetch the
+originals of the first three to a temporary file, diff them and carry over what changed upstream.
+Check `LICENSE` of the go2rtc repository as well, in case the copyright line moved on. Then check that no page links to a
 file that is not here, because a new version of go2rtc may add one:
 
 ```sh
