@@ -1,4 +1,8 @@
 # Older changes
+## 1.3.2 (2024-09-10)
+
+* (bropat) Fixed issue #440
+
 ## 1.3.1 (2024-09-08)
 
 * (bropat) Fixed issue #436

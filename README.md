@@ -50,7 +50,7 @@ Adapter 2.0.3 and newer support node.js 22. Prior node.js versions require a spe
 	Placeholder for the next version (at the beginning of the line):
 	### **WORK IN PROGRESS**
 -->
-### **WORK IN PROGRESS**
+### 3.0.3 (2026-09-02)
 - (typhosj) Removed the "HTTPS streaming url" setting. The adapter never configures TLS for go2rtc and go2rtc ignores `api.tls_listen` without a certificate, so the option only ever produced a livestream URL that could not be opened. The URL is built with `http` now
 - (typhosj) The livestream page (`http://<host>:1984/stream.html?src=<serial>`) is now served by the adapter, with the defaults that make a stream unstable on weak clients such as a Fire tablet replaced: MSE instead of WebRTC (go2rtc cannot request a keyframe for a pushed stream, so WebRTC starts in the middle of a GOP and shows green artifacts - `?mode=webrtc,mse,hls,mjpeg` restores the old order), the picture is pulled back to the live edge instead of falling further behind with every stall, and a reconnect starts after a second instead of 15. The URL, the parameters `src`, `mode`, `background` and `width`, several streams side by side and the status overlay all stay as they were; new are `?audio=false` (play video only), `?controls=false` (hide the native controls, so a tap cannot pause the stream) and `?drift=<seconds>`
 - (typhosj) The `livestream` state now carries `&background=false`, so the player disconnects while its page is not visible. Without it the browser keeps decoding behind a switched off display and leaves a consumer attached that never recovers once the producer is gone
@@ -80,10 +80,6 @@ Adapter 2.0.3 and newer support node.js 22. Prior node.js versions require a spe
 
 * (bropat) Updated version of the package eufy-security-client (3.1.1)
 * (bropat) Further details can be found in the changelog of eufy-security-client (3.1.1)
-
-### 1.3.2 (2024-09-10)
-
-* (bropat) Fixed issue #440
 
 [Older changelogs can be found there](CHANGELOG_OLD.md)
 
