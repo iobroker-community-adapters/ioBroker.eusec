@@ -8,6 +8,9 @@ nbproject
 # Sourcemaps
 maps/
 
+# Build output - generated from src/ on every install and before publishing
+build/
+
 # npm package files
 *.tgz
 
