@@ -51,6 +51,8 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           os: ${{ matrix.os }}
+          # eufy-security-client 4.x declares node >=24 but runs on node 22; do not fail the install on the engines field
+          engine-strict: false
           # Uncomment the following line if your adapter cannot be installed using 'npm ci'
           # install-command: 'npm install'
           build: true
