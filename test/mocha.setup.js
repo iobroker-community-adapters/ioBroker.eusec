@@ -6,6 +6,10 @@ process.env.TS_NODE_IGNORE_WARNINGS = "TRUE";
 process.env.TS_NODE_PROJECT = "tsconfig.json";
 // Make ts-node respect the "include" key in tsconfig.json
 process.env.TS_NODE_FILES = "TRUE";
+// The root tsconfig sets noEmit, because it only configures type checking - ts-node has to emit.
+// TypeScript 6 then refuses with TS5011 unless rootDir is explicit, because the common source
+// directory of a single compiled file is that file's own directory.
+process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({ rootDir: ".", noEmit: false });
 
 // Don't silently swallow unhandled rejections
 process.on("unhandledRejection", (e) => {

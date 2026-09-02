@@ -34,6 +34,27 @@ jobs:
           type-checking: true
           lint: false
 
+  # Runs the unit tests. The ioBroker actions only run test:package and test:integration,
+  # so without this job nothing ever executes src/**/*.test.ts.
+  unit-tests:
+    needs: [check-and-lint]
+
+    if: contains(github.event.head_commit.message, '[skip ci]') == false
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+          cache: 'npm'
+      - name: Install dependencies
+        # eufy-security-client 4.x declares node >=24 but runs on node 22; do not fail on the engines field
+        run: npm ci --engine-strict=false
+      - name: Run unit tests
+        run: npm run test:ts
+
   # Runs adapter tests on all supported node versions and OSes
   adapter-tests:
     needs: [check-and-lint]
@@ -63,7 +84,7 @@ jobs:
 
   # Deploys the final package to NPM
   deploy:
-    needs: [check-and-lint, adapter-tests]
+    needs: [check-and-lint, unit-tests, adapter-tests]
 
     # Trigger this step only when a commit on any branch is tagged with a version number
     if: |
