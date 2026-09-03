@@ -1418,6 +1418,13 @@ export class euSec extends Adapter {
                 },
                 native: {},
             });
+
+            // Both states only ever carry a URL while a livestream runs. Without a value they do
+            // not exist in the states database at all, and every getState() on them logs
+            // "not found (3)" with a stack trace. Nothing is streaming while the adapter starts,
+            // so the empty value is also the correct one for a URL left over from the last run.
+            await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM), { val: '', ack: true });
+            await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP), { val: '', ack: true });
         }
 
         if (device.hasProperty(PropertyName.DeviceRTSPStream)) {
@@ -1942,7 +1949,10 @@ export class euSec extends Adapter {
                     switch (name) {
                         case PropertyName.DeviceRTSPStream:
                             if ((value as boolean) === false) {
-                                await this.delStateAsync(device.getStateID(DeviceStateID.RTSP_STREAM_URL));
+                                await this.setStateAsync(device.getStateID(DeviceStateID.RTSP_STREAM_URL), {
+                                    val: '',
+                                    ack: true,
+                                });
                             }
                             break;
                     }
@@ -2115,10 +2125,10 @@ export class euSec extends Adapter {
 
     private async onStationLivestreamStop(_station: Station, device: Device): Promise<void> {
         try {
-            await this.delStateAsync(device.getStateID(DeviceStateID.LIVESTREAM));
-            await this.delStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP));
+            await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM), { val: '', ack: true });
+            await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP), { val: '', ack: true });
         } catch (error) {
-            this.log.error(`Cannot delete: ${error as Error}`);
+            this.log.error(`Cannot clear the livestream states: ${error as Error}`);
         }
     }
 
@@ -2214,12 +2224,8 @@ export class euSec extends Adapter {
         // in place points every consumer at a producer that no longer exists.
         try {
             for (const device of await this.eufy.getDevicesFromStation(station.getSerial())) {
-                await this.delStateAsync(device.getStateID(DeviceStateID.LIVESTREAM)).catch(() => {
-                    /* not streaming */
-                });
-                await this.delStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP)).catch(() => {
-                    /* not streaming */
-                });
+                await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM), { val: '', ack: true });
+                await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP), { val: '', ack: true });
             }
         } catch (error) {
             this.logger.error(`Station: ${station.getSerial()} - Error while clearing livestream states`, error);
