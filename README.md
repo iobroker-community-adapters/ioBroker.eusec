@@ -50,7 +50,7 @@ Adapter 2.0.3 and newer support node.js 22. Prior node.js versions require a spe
 	Placeholder for the next version (at the beginning of the line):
 	### **WORK IN PROGRESS**
 -->
-### **WORK IN PROGRESS**
+### 3.1.0 (2026-09-03)
 - (typhosj) The adapter requires node.js >= 24 now as`eufy-security-client` 4.x requires `node >=24` itself
 - (typhosj) The `livestream`, `livestream_rtsp` and `rtsp_stream_url` states are emptied instead of deleted when a stream ends. 
 - (typhosj) Removed the "HTTPS streaming url" setting. The adapter never configures TLS for go2rtc and go2rtc ignores `api.tls_listen` without a certificate, so the option only ever produced a livestream URL that could not be opened. The URL is built with `http` now
@@ -82,6 +82,7 @@ Adapter 2.0.3 and newer support node.js 22. Prior node.js versions require a spe
 
 * (bropat) Updated version of the package eufy-security-client (3.1.1)
 * (bropat) Further details can be found in the changelog of eufy-security-client (3.1.1)
+
 
 [Older changelogs can be found there](CHANGELOG_OLD.md)
 
