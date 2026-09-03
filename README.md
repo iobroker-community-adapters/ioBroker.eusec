@@ -50,6 +50,11 @@ Adapter 2.0.3 and newer support node.js 22. Prior node.js versions require a spe
 	Placeholder for the next version (at the beginning of the line):
 	### **WORK IN PROGRESS**
 -->
+### **WORK IN PROGRESS**
+- (typhosj) The `postinstall` script was removed. ioBroker does not allow `postinstall` scripts in adapters (repository checker E0094), and `cleanupCveFix.js` was a one-time migration that cleared `common.nodeProcessParams` of instances installed before 2.0.0 on node.js < 22. Those instances cannot run on the node.js versions this adapter supports anyway, so the script had nothing left to do
+- (typhosj) Removed `admin/words.js` and `adapter-settings.js`, leftovers of the old materialize admin UI. The settings are a `jsonConfig.json` since 1.x and nothing referenced either file
+- (typhosj) The "Country" label in the admin settings is translated now, the untranslated Ukrainian changelog entries of 1.3.1 to 1.3.3 were translated, `admin/jsonConfig.json` was reformatted with the repository prettier configuration, and the CI check job runs the linter (`lint: true`)
+
 ### 3.0.3 (2026-09-02)
 - (typhosj) Removed the "HTTPS streaming url" setting. The adapter never configures TLS for go2rtc and go2rtc ignores `api.tls_listen` without a certificate, so the option only ever produced a livestream URL that could not be opened. The URL is built with `http` now
 - (typhosj) The livestream page (`http://<host>:1984/stream.html?src=<serial>`) is now served by the adapter, with the defaults that make a stream unstable on weak clients such as a Fire tablet replaced: MSE instead of WebRTC (go2rtc cannot request a keyframe for a pushed stream, so WebRTC starts in the middle of a GOP and shows green artifacts - `?mode=webrtc,mse,hls,mjpeg` restores the old order), the picture is pulled back to the live edge instead of falling further behind with every stall, and a reconnect starts after a second instead of 15. The URL, the parameters `src`, `mode`, `background` and `width`, several streams side by side and the status overlay all stay as they were; new are `?audio=false` (play video only), `?controls=false` (hide the native controls, so a tap cannot pause the stream) and `?drift=<seconds>`
