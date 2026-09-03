@@ -22,7 +22,7 @@
     "url": "https://github.com/iobroker-community-adapters/ioBroker.eusec"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=24.0.0"
   },
   "dependencies": {
     "@bropat/fluent-ffmpeg": "^2.1.3",

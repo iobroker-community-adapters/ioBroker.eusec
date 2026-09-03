@@ -50,6 +50,9 @@ Adapter 2.0.3 and newer support node.js 22. Prior node.js versions require a spe
 	Placeholder for the next version (at the beginning of the line):
 	### **WORK IN PROGRESS**
 -->
+### **WORK IN PROGRESS**
+- (typhosj) The adapter requires node.js >= 24 now. `eufy-security-client` 4.x declares `node >=24` itself, so an install on node 22 only worked because CI and the install command suppressed the engines check; the field says what the dependency actually needs now
+
 ### 3.0.3 (2026-09-02)
 - (typhosj) Removed the "HTTPS streaming url" setting. The adapter never configures TLS for go2rtc and go2rtc ignores `api.tls_listen` without a certificate, so the option only ever produced a livestream URL that could not be opened. The URL is built with `http` now
 - (typhosj) The livestream page (`http://<host>:1984/stream.html?src=<serial>`) is now served by the adapter, with the defaults that make a stream unstable on weak clients such as a Fire tablet replaced: MSE instead of WebRTC (go2rtc cannot request a keyframe for a pushed stream, so WebRTC starts in the middle of a GOP and shows green artifacts - `?mode=webrtc,mse,hls,mjpeg` restores the old order), the picture is pulled back to the live edge instead of falling further behind with every stall, and a reconnect starts after a second instead of 15. The URL, the parameters `src`, `mode`, `background` and `width`, several streams side by side and the status overlay all stay as they were; new are `?audio=false` (play video only), `?controls=false` (hide the native controls, so a tap cannot pause the stream) and `?drift=<seconds>`
