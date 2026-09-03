@@ -60,8 +60,7 @@
     "build/",
     "www/",
     "io-package.json",
-    "LICENSE",
-    "cleanupCveFix.js"
+    "LICENSE"
   ],
   "scripts": {
     "prepare": "npm run build",
@@ -78,8 +77,7 @@
     "check": "tsc --noEmit",
     "lint": "eslint -c eslint.config.mjs",
     "translate": "translate-adapter",
-    "release": "release-script",
-    "postinstall": "node ./cleanupCveFix.js"
+    "release": "release-script"
   },
   "bugs": {
     "url": "https://github.com/iobroker-community-adapters/ioBroker.eusec/issues"
