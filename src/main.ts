@@ -26,6 +26,7 @@ import {
     PropertyName,
     CommandName,
     PanTiltDirection,
+    PresetPositionType,
     DeviceNotFoundError,
     StationNotFoundError,
     ensureError,
@@ -688,6 +689,15 @@ export class euSec extends Adapter {
                         case DeviceStateID.TILT_DOWN:
                             station.panAndTilt(device, PanTiltDirection.DOWN);
                             break;
+                        case DeviceStateID.PRESET_POSITION:
+                            station.presetPosition(device, state.val as PresetPositionType);
+                            break;
+                        case DeviceStateID.SAVE_PRESET_POSITION:
+                            station.savePresetPosition(device, state.val as PresetPositionType);
+                            break;
+                        case DeviceStateID.DELETE_PRESET_POSITION:
+                            station.deletePresetPosition(device, state.val as PresetPositionType);
+                            break;
                         case DeviceStateID.CALIBRATE:
                             if (device.isLock()) {
                                 station.calibrateLock(device);
@@ -1287,6 +1297,36 @@ export class euSec extends Adapter {
                 },
                 native: {},
             });
+        }
+        const presetPositionCommands: [CommandName, string, string][] = [
+            [CommandName.DevicePresetPosition, DeviceStateID.PRESET_POSITION, 'Move to preset position'],
+            [
+                CommandName.DeviceSavePresetPosition,
+                DeviceStateID.SAVE_PRESET_POSITION,
+                'Save current position as preset',
+            ],
+            [CommandName.DeviceDeletePresetPosition, DeviceStateID.DELETE_PRESET_POSITION, 'Delete preset position'],
+        ];
+        for (const [command, stateId, name] of presetPositionCommands) {
+            if (device.hasCommand(command)) {
+                await this.setObjectNotExistsAsync(device.getStateID(stateId), {
+                    type: 'state',
+                    common: {
+                        name: name,
+                        type: 'number',
+                        role: 'level',
+                        read: false,
+                        write: true,
+                        states: {
+                            [PresetPositionType.PRESET_1]: 'Preset 1',
+                            [PresetPositionType.PRESET_2]: 'Preset 2',
+                            [PresetPositionType.PRESET_3]: 'Preset 3',
+                            [PresetPositionType.PRESET_4]: 'Preset 4',
+                        },
+                    },
+                    native: {},
+                });
+            }
         }
         if (device.hasCommand(CommandName.DeviceLockCalibration)) {
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.CALIBRATE), {
