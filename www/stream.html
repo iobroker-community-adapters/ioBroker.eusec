@@ -43,6 +43,10 @@
      *     stall of the client used to add to the delay permanently.
      *   - A reconnect starts after a second instead of after the 15 of RECONNECT_TIMEOUT, doubling
      *     up to those 15 seconds while playback does not come back.
+     *   - Playback that hangs rebuilds the connection. When the livestream stops - the maximum
+     *     duration is reached, or a lost P2P packet ends the stream - go2rtc keeps the consumer
+     *     attached without sending anything and without closing it, so the picture used to freeze
+     *     for good and did not come back even once the next livestream started.
      *
      * Added query parameters: audio=false (play video only), controls=false (hide the native
      * controls, so a tap on a touch screen cannot pause the stream), drift=<seconds> (how far the
@@ -61,6 +65,11 @@
     /** Delay of the first reconnect. Doubles up to RECONNECT_MAX until playback works again. */
     const RECONNECT_MIN = 1000;
     const RECONNECT_MAX = 15000;
+    /**
+     * How long playback may hang before the connection is rebuilt. Long enough that catching up to
+     * the live edge, which stalls the element for a moment, does not count as a hang.
+     */
+    const STALL_MIN = 5000;
 
     // video-stream.js only registers the element, it exports nothing. Extending the registered class
     // keeps its status overlay ("loading", the mode, errors) instead of reimplementing it.
@@ -72,11 +81,54 @@
 
             this.video.controls = params.get('controls') !== 'false';
             this.video.disablePictureInPicture = true;
+            this.stallTimeout = STALL_MIN;
+            this.stallTID = 0;
 
             this.video.addEventListener('playing', () => {
                 this.RECONNECT_TIMEOUT = RECONNECT_MIN;
+                this.stallTimeout = STALL_MIN;
+                this.clearStall();
             });
+            // "waiting" is what the element fires when it runs out of buffered data, which is the
+            // only sign that the producer is gone - the socket stays open and silent.
+            this.video.addEventListener('waiting', () => this.watchStall());
             this.video.addEventListener('timeupdate', () => this.catchUp());
+        }
+
+        /**
+         * Rebuilds the connection when playback does not come back. A consumer that go2rtc left
+         * behind never receives anything again, not even from the next producer, so reconnecting is
+         * the only way out. Backs off the same way a closed socket does, because the reconnect finds
+         * no producer for as long as no livestream runs.
+         */
+        watchStall() {
+            if (this.stallTID) {
+                return;
+            }
+            this.stallTID = setTimeout(() => {
+                this.stallTID = 0;
+                // A hidden page is disconnected on purpose when background is off, and a paused
+                // element is the viewer's decision - neither is a hang.
+                if (!this.isConnected || this.video.paused || document.hidden) {
+                    return;
+                }
+                this.ondisconnect();
+                this.onconnect();
+                this.stallTimeout = Math.min(this.stallTimeout * 2, RECONNECT_MAX);
+                // The rebuilt connection can be just as silent, and a stopped element fires no
+                // further "waiting" - keep watching instead of waiting for an event that never comes.
+                this.watchStall();
+            }, this.stallTimeout);
+        }
+
+        /**
+         * Stops watching for a hang, called as soon as pictures arrive again.
+         */
+        clearStall() {
+            if (this.stallTID) {
+                clearTimeout(this.stallTID);
+                this.stallTID = 0;
+            }
         }
 
         /**
