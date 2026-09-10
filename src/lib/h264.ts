@@ -23,6 +23,12 @@ const NAL_TYPE_SPS = 7;
 const HIGH_PROFILES = new Set([100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135]);
 
 /**
+ * Every profile_idc the standard defines, the ones above plus baseline, main and extended. A byte
+ * outside this set is not the start of an SPS, whatever the NAL header claimed.
+ */
+const PROFILES = new Set([66, 77, 88, ...HIGH_PROFILES]);
+
+/**
  * Levels as `[level_idc, MaxFS, MaxMBPS, MaxDpbMbs]` from ITU-T H.264 table A-1, in ascending
  * order. MaxFS is the frame size in macroblocks, MaxMBPS the macroblock rate per second and
  * MaxDpbMbs the size of the decoded picture buffer in macroblocks.
@@ -188,6 +194,9 @@ export const requiredLevel = (sps: Uint8Array, fps: number): number | undefined 
         const reader = new BitReader(toRbsp(sps));
         reader.bits(8); // nal header
         const profile = reader.bits(8);
+        if (!PROFILES.has(profile)) {
+            return undefined;
+        }
         reader.bits(16); // constraint flags, reserved bits and the level_idc that gets replaced
         reader.ue(); // seq_parameter_set_id
         if (HIGH_PROFILES.has(profile)) {
@@ -245,82 +254,63 @@ const nextStartCode = (buffer: Buffer, from: number): number => {
 
 /**
  * Builds a stream that rewrites the declared level of every SPS of an Annex B H.264 stream to the
- * level the stream really needs. The level is worked out once, from the first SPS that can be
- * read, and then written into every following SPS - the cameras repeat the SPS before each
- * keyframe, and go2rtc builds the init segment from whichever one its consumer sees first.
+ * level the stream really needs. The cameras repeat the SPS before each keyframe and go2rtc builds
+ * the init segment from whichever one its consumer sees first, so every one of them is looked at.
  *
- * A stream whose SPS cannot be read passes through untouched.
+ * Each SPS is judged on its own instead of deriving one level for the whole stream. A single SPS
+ * that cannot be read - the first bytes after a freshly built P2P session are not always a clean
+ * one - then costs nothing but that one SPS, where a cached level would be stamped into every
+ * following SPS of the livestream.
  *
  * @param fps Frame rate reported for the stream
- * @param onLevel Called once with the old and the new level when the first SPS was read
+ * @param onLevel Called with the declared and the new level whenever the level changes
  * @returns A transform stream to put in front of the go2rtc ingest
  */
 export const createSpsLevelPatcher = (fps: number, onLevel?: (from: number, to: number) => void): Transform => {
     let carry: Buffer = Buffer.alloc(0);
-    let level: number | undefined;
-    let passthrough = false;
-    let reportLevel = false;
+    let reported = 0;
 
     return new Transform({
         transform(chunk: Buffer, _encoding, callback): void {
-            if (passthrough) {
-                callback(null, chunk);
-                return;
-            }
-
             const buffer = carry.length > 0 ? Buffer.concat([carry, chunk]) : chunk;
             let pending = -1;
 
-            for (let i = 0; i + 3 < buffer.length; i++) {
+            for (let i = 0; i + 6 < buffer.length; i++) {
                 if (buffer[i] !== 0 || buffer[i + 1] !== 0 || buffer[i + 2] !== 1) {
                     continue;
                 }
                 if ((buffer[i + 3] & 0x1f) !== NAL_TYPE_SPS) {
                     continue;
                 }
-                if (level === undefined) {
-                    const end = nextStartCode(buffer, i + 3);
-                    if (end < 0) {
+                const end = nextStartCode(buffer, i + 3);
+                if (end < 0) {
+                    if (buffer.length - i <= MAX_PENDING_SPS) {
                         // The SPS is not complete yet - hold it back until the rest arrives.
                         pending = i;
                         break;
                     }
-                    level = requiredLevel(buffer.subarray(i + 3, end), fps);
-                    if (level === undefined) {
-                        passthrough = true;
-                        break;
-                    }
-                    reportLevel = true;
+                    // Whatever is at that offset never turned into a readable SPS. Let it pass
+                    // instead of buffering the whole livestream.
+                    continue;
                 }
-                if (i + 6 >= buffer.length) {
-                    pending = i;
-                    break;
+                const level = requiredLevel(buffer.subarray(i + 3, end), fps);
+                // Only ever lower a level that is declared too high. Raising one helps no decoder,
+                // and it would let a single misread SPS claim more than the camera ever did.
+                if (level === undefined || level >= buffer[i + 6]) {
+                    continue;
                 }
-                if (reportLevel) {
-                    reportLevel = false;
+                if (level !== reported) {
+                    reported = level;
                     onLevel?.(buffer[i + 6], level);
                 }
                 buffer[i + 6] = level;
-                i += 6;
-            }
-
-            if (passthrough) {
-                carry = Buffer.alloc(0);
-                callback(null, buffer);
-                return;
+                i = end - 1;
             }
 
             if (pending < 0) {
                 // Hold back a start code that may be split across chunks, plus the three bytes up
                 // to the level of an SPS that begins right at the end of this chunk.
                 pending = Math.max(0, buffer.length - 6);
-            } else if (buffer.length - pending > MAX_PENDING_SPS) {
-                // Whatever is at that offset never turned into a readable SPS. Stop looking
-                // instead of buffering the whole livestream.
-                passthrough = true;
-                carry = Buffer.alloc(0);
-                callback(null, buffer);
-                return;
             }
 
             carry = Buffer.from(buffer.subarray(pending));

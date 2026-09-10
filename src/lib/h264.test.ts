@@ -110,6 +110,45 @@ describe('h264 => createSpsLevelPatcher', () => {
         expect(out.equals(input)).to.equal(true);
     });
 
+    it('should leave an SPS alone that declares a lower level than the stream needs', async () => {
+        // Same 1600x1200 stream, but declared as level 3.0 - it needs 4.0, and claiming more than
+        // the camera did helps no decoder.
+        const understated = Buffer.from(SPS_1600x1200);
+        understated[3] = 30;
+        const input = Buffer.concat([startCode, understated, startCode, pps]);
+        const out = await collect([Buffer.from(input)]);
+
+        expect(out.equals(input)).to.equal(true);
+    });
+
+    it('should keep patching after an SPS it could not read, instead of trusting the first one', async () => {
+        // The first bytes after a freshly built P2P session are not always a clean SPS. A cached
+        // level would be stamped into every following SPS of the livestream.
+        const unreadable = Buffer.from('67ffffffffffffff', 'hex');
+        const input = Buffer.concat([
+            startCode,
+            unreadable,
+            startCode,
+            SPS_1600x1200,
+            startCode,
+            pps,
+            startCode,
+            SPS_1600x1200,
+            startCode,
+            pps,
+        ]);
+        const out = await collect([Buffer.from(input)]);
+        const levels: number[] = [];
+        for (let i = 0; i + 6 < out.length; i++) {
+            if (out[i] === 0 && out[i + 1] === 0 && out[i + 2] === 1 && (out[i + 3] & 0x1f) === 7) {
+                levels.push(out[i + 6]);
+            }
+        }
+
+        expect(levels).to.deep.equal([0xff, 40, 40]);
+        expect(out.length).to.equal(input.length);
+    });
+
     it('should pass a stream without any SPS through untouched', async () => {
         const input = Buffer.concat([startCode, Buffer.from('65aabbccdd', 'hex')]);
         const out = await collect([Buffer.from(input)]);
