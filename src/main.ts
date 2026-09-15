@@ -463,7 +463,8 @@ export class euSec extends Adapter {
         this.go2rtcProcess = go2rtc;
 
         go2rtc.on('error', error => {
-            this.log.error(`go2rtc error: ${error}`);
+            // While shutting down, the kill() of stopGo2rtc() surfaces here - expected, not a fault.
+            this.log[this.terminating ? 'info' : 'error'](`go2rtc error: ${error}`);
         });
         go2rtc.stdout.setEncoding('utf8');
         go2rtc.stdout.on('data', data => {
@@ -471,7 +472,7 @@ export class euSec extends Adapter {
         });
         go2rtc.stderr.setEncoding('utf8');
         go2rtc.stderr.on('data', data => {
-            this.log.error(`go2rtc error: ${data}`);
+            this.log[this.terminating ? 'info' : 'error'](`go2rtc error: ${data}`);
         });
         go2rtc.on('close', exitcode => {
             this.go2rtcProcess = undefined;
@@ -533,7 +534,9 @@ export class euSec extends Adapter {
             this.terminating = true;
             this.stopGo2rtc();
 
-            await this.writePersistentData();
+            // No writePersistentData() here: persistentData only ever changes in the version
+            // update path, which writes it itself. Writing it again on unload raced the closing
+            // file DB and only ever produced "writePersistentData() - Error: DB closed".
 
             if (this.eufy) {
                 if (this.eufy.isConnected()) {
