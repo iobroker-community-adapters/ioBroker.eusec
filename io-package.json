@@ -1,8 +1,21 @@
 {
   "common": {
     "name": "eusec",
-    "version": "3.2.0",
+    "version": "3.2.1",
     "news": {
+      "3.2.1": {
+        "en": "An event picture that cannot be decoded no longer replaces the last picture with a `<serial>.unknown` file; `picture_url` and `picture_html` keep the previous picture and a warning names the device, the data length and the image format (#136)",
+        "de": "Ein Eventbild, das nicht dekodiert werden kann, ersetzt das letzte Bild nicht mehr durch <serial>`.unknown`; `picture_url` und `picture_html` behalten das vorherige Bild und eine Warnung nennt Gerät, Datenlänge und Bildformat (#136)",
+        "ru": "Изображение события, которое невозможно декодировать, больше не заменяет предыдущее изображение <serial>файлом `.unknown`; `picture_url` и `picture_html` сохраняют предыдущее изображение, а в предупреждении указано устройство, длина данных и формат изображения (#136)",
+        "pt": "Uma imagem de evento que não pode ser decodificada não substitui mais a última por um <serial>arquivo `.unknown`; `picture_url` e `picture_html` mantêm a foto anterior e um aviso indica o dispositivo, o tamanho e o formato da imagem (#136)",
+        "nl": "Een foto van een gebeurtenis die niet kan worden gedecodeerd, vervangt niet langer de laatste foto door een <serial>bestand `.unknown`; in `picture_url` en `picture_html` wordt de vorige foto bewaard en een waarschuwing geeft de naam van het apparaat, de gegevenslengte en het beeldformaat (#136)",
+        "fr": "L'image d'un événement qui ne peut pas être décodée ne remplace plus la dernière par un <serial>fichier .unknown ; picture_url et picture_html conservent l'image précédente et un avertissement indique l'appareil, la longueur des données et le format de l'image (#136)",
+        "it": "Una foto dell'evento non decodificabile non sostituisce più l'ultima con un <serial>file `.unknown`; picture_url` e `picture_html` mantengono l'immagine precedente e un avviso nomina il dispositivo, la lunghezza e il formato (#136)",
+        "es": "Una imagen de evento que no se puede decodificar ya no sustituye la última imagen por un <serial>archivo `.unknown`; `picture_url` y `picture_html` conservan la imagen anterior y un aviso con el nombre del dispositivo, la longitud de los datos y el formato de la imagen (#136)",
+        "pl": "Obraz zdarzenia, którego nie można odkodować, nie zastępuje już ostatniego obrazu <serial>plikiem `.unknown`; `picture_url` i `picture_html` zachowują poprzedni obraz, a ostrzeżenie nazywa urządzenie, długość danych i format obrazu (#136)",
+        "uk": "Зображення події, яке неможливо розшифрувати, більше не замінює останнє зображення <serial>файлом `.unknown`; `picture_url` та `picture_html` зберігають попереднє зображення, а попередження називає пристрій, довжину даних та формат зображення (#136)",
+        "zh-cn": "无法解码的事件图片不再用 `<serial>.unknown` 文件替换最后一张图片；`picture_url` 和 `picture_html` 保留之前的图片，警告会命名设备、数据长度和图像格式 (#136)"
+      },
       "3.2.0": {
         "en": "Pan and tilt cameras expose their four PTZ preset positions: `preset_position` moves the camera to a preset, `save_preset_position` stores the current position in one and `delete_preset_position` clears one. The states are only created for devices that report the matching command (#155)",
         "de": "Schwenk- und Neigekameras zeigen ihre vier PTZ-Positionen an: `preset_position` bewegt die Kamera in eine, `save_preset_position` speichert die aktuelle Position und `delete_preset_position` löscht eine. Die Status gelten nur für Geräte, die den passenden Befehl melden (#155)",

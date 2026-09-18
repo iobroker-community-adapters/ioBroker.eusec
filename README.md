@@ -50,7 +50,7 @@ Adapter 2.0.3 and newer support node.js 22. Prior node.js versions require a spe
 	Placeholder for the next version (at the beginning of the line):
 	### **WORK IN PROGRESS**
 -->
-### **WORK IN PROGRESS**
+### 3.2.1 (2026-09-18)
 - (typhosj) An event picture that cannot be decoded no longer replaces the last picture with a `<serial>.unknown` file; `picture_url` and `picture_html` keep the previous picture and a warning names the device, the data length and the image format (#136)
 
 ### 3.2.0 (2026-09-15)
@@ -77,12 +77,6 @@ Adapter 2.0.3 and newer support node.js 22. Prior node.js versions require a spe
 
 ### 2.0.3 (2025-10-26)
 - (mcm1957) Remove fix for CVE-2023-46809 for node.js 22 and newer
-
-### 2.0.0 (2025-10-26)
-
-- (mcm1957) Adapter has been migrated to iobroker-community-adapters organisation
-- (mcm1957) Adapter requires node.js >= 20, js-controller >= 6.0.11 and admin >= 7.6.17 now
-- (mcm1957) Dependencies have been updated
 
 [Older changelogs can be found there](CHANGELOG_OLD.md)
 
