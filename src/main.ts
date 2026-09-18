@@ -51,6 +51,7 @@ import {
     setStateChangedAsync,
 } from './lib/utils';
 import type { PersistentData } from './lib/interfaces';
+import { describePictureData, getPictureExtension } from './lib/picture';
 import { ioBrokerLogger } from './lib/log';
 import { applyEufyApiCompatibility } from './lib/eufyApiCompat';
 import { buildPlayerUrl, streamToGo2rtcFailed } from './lib/go2rtc';
@@ -2006,7 +2007,15 @@ export class euSec extends Adapter {
         if (name === PropertyName.DevicePicture) {
             try {
                 const picture = value as Picture;
-                const fileName = `${device.getSerial()}.${picture.type.ext}`;
+                const ext = getPictureExtension(picture);
+                if (ext === undefined) {
+                    // Keep the last good picture instead of storing a "<serial>.unknown" file (#136).
+                    this.logger.warn(
+                        `Event picture of device ${device.getSerial()} could not be decoded, keeping the previous picture (${describePictureData(picture?.data)})`,
+                    );
+                    return;
+                }
+                const fileName = `${device.getSerial()}.${ext}`;
                 const filePath = path.join(device.getStationSerial(), DataLocation.LAST_EVENT);
                 if (!(await this.fileExistsAsync(this.namespace, filePath))) {
                     await this.mkdirAsync(this.namespace, filePath);
@@ -2015,7 +2024,7 @@ export class euSec extends Adapter {
 
                 await this.setStateAsync(
                     device.getStateID(DeviceStateID.PICTURE_URL),
-                    `/files/${this.namespace}/${device.getStationSerial()}/${DataLocation.LAST_EVENT}/${device.getSerial()}.${picture.type.ext}`,
+                    `/files/${this.namespace}/${device.getStationSerial()}/${DataLocation.LAST_EVENT}/${fileName}`,
                     true,
                 );
                 await setStateChangedAsync(
