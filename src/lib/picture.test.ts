@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import type { Picture } from 'eufy-security-client';
 
-import { getPictureExtension } from './picture';
+import { describePictureData, getPictureExtension } from './picture';
 
 const JPEG_HEAD = Buffer.from('ffd8ffe000104a464946', 'hex');
 
@@ -37,5 +37,36 @@ describe('picture => getPictureExtension', () => {
         expect(
             getPictureExtension({ data: 'ffd8' as unknown as Buffer, type: { ext: 'jpg', mime: 'image/jpeg' } }),
         ).to.equal(undefined);
+    });
+});
+
+describe('picture => describePictureData', () => {
+    it('should name the eufy format prefix and the length (#136)', () => {
+        const data = Buffer.concat([
+            Buffer.from('v8_eufysecurity:T8030P2323250791:', 'latin1'),
+            Buffer.from([0x0b, 0x02, 0x3a]),
+        ]);
+        expect(describePictureData(data)).to.equal(`${data.length} bytes, format "v8_eufysecurity"`);
+    });
+
+    it('should name the legacy prefix without version', () => {
+        expect(describePictureData(Buffer.from('eufysecurity:T8113:', 'latin1'))).to.equal(
+            '19 bytes, format "eufysecurity"',
+        );
+    });
+
+    it('should not report binary data or a late colon as a format', () => {
+        expect(describePictureData(Buffer.from('ffd8ff3a', 'hex'))).to.equal('4 bytes, unrecognised format');
+        expect(describePictureData(Buffer.from(':abc', 'latin1'))).to.equal('4 bytes, unrecognised format');
+        expect(describePictureData(Buffer.from(`${'a'.repeat(32)}:`, 'latin1'))).to.equal(
+            '33 bytes, unrecognised format',
+        );
+        expect(describePictureData(Buffer.from([0x41]))).to.equal('1 bytes, unrecognised format');
+    });
+
+    it('should handle missing or empty data', () => {
+        expect(describePictureData(undefined)).to.equal('no data');
+        expect(describePictureData(Buffer.alloc(0))).to.equal('no data');
+        expect(describePictureData('v8_eufysecurity:')).to.equal('no data');
     });
 });

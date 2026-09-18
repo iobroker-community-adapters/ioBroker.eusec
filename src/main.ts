@@ -51,7 +51,7 @@ import {
     setStateChangedAsync,
 } from './lib/utils';
 import type { PersistentData } from './lib/interfaces';
-import { getPictureExtension } from './lib/picture';
+import { describePictureData, getPictureExtension } from './lib/picture';
 import { ioBrokerLogger } from './lib/log';
 import { applyEufyApiCompatibility } from './lib/eufyApiCompat';
 import { buildPlayerUrl, streamToGo2rtcFailed } from './lib/go2rtc';
@@ -2010,9 +2010,8 @@ export class euSec extends Adapter {
                 const ext = getPictureExtension(picture);
                 if (ext === undefined) {
                     // Keep the last good picture instead of storing a "<serial>.unknown" file (#136).
-                    const head = Buffer.isBuffer(picture?.data) ? picture.data.subarray(0, 16).toString('hex') : 'none';
                     this.logger.warn(
-                        `Event picture of device ${device.getSerial()} could not be decoded, keeping the previous picture (first bytes: ${head})`,
+                        `Event picture of device ${device.getSerial()} could not be decoded, keeping the previous picture (${describePictureData(picture?.data)})`,
                     );
                     return;
                 }
