@@ -37,13 +37,18 @@ Information about supported devices can be found [here](https://github.com/bropa
 
 This adapter would not have been possible without the great work of Patrick Broetto (brobat) <https://github.com/bropat>, who created previous releases of this adapter.
 
-## IMPORTANT information when upgrading to node.js 22
+## Upgrading from adapter 2.x or older
 
-Adapter 2.0.3 and newer support node.js 22. Prior node.js versions require a special setup which became invalid with node.js 22. So when upgrading node.js from any version lower than 22.x.x to node.js 22, please follow these steps:
+Adapter 2.x and older added `--security-revert=CVE-2023-46809` to the node process parameters of every instance running on node.js 18 or 20. node.js 22 and newer refuse to start an instance with that flag, and this adapter requires node.js 24.
 
-- If you have node.js < 22 and adapter < 2.0.0 installed, please update node.js first and install adapter 2.0.3 afterwards.
-- If you have adapter >= 2.0.0 installed with any node release prior to 22, you MUST reinstall the adapter. A detailed description (in German) is available at our forum (https://forum.iobroker.net/topic/82651/test-adapter-eusec-v2-0-x)
-  
+Installing this adapter removes the flag from all eusec instances automatically; other node process parameters are kept. If an instance still does not start and its log shows `--security-revert=CVE-2023-46809`, remove the parameters by hand and restart the instance:
+
+```
+iobroker object set system.adapter.eusec.0 common.nodeProcessParams=[]
+```
+
+A detailed description (in German) is available at our forum (https://forum.iobroker.net/topic/82651/test-adapter-eusec-v2-0-x).
+
 ## Changelog
 
 <!--
@@ -51,6 +56,7 @@ Adapter 2.0.3 and newer support node.js 22. Prior node.js versions require a spe
 	### **WORK IN PROGRESS**
 -->
 ### **WORK IN PROGRESS**
+- (typhosj) Installing the adapter now removes only `--security-revert=CVE-2023-46809` from the node process parameters of an instance instead of clearing them all, so parameters such as `--max-old-space-size` survive an update. A failure there no longer aborts the installation
 - (typhosj) Livestreams no longer fail with "RSA_PKCS1_PADDING is no longer supported for private decryption" on node.js builds that refuse RSA PKCS#1 v1.5 decryption; the stream key is now decrypted by node-rsa's own implementation (#144)
 - (typhosj) The eufyCam C31 (T817L) is no longer an unknown device without states; the adapter handles it like the SoloCam Spotlight 1080, which gives it livestream, motion and person detection, light and alarm. Pan and tilt are not available yet (#156)
 
