@@ -124,12 +124,6 @@ export const lowestUnusedNumber = function (sequence: number[], startingFrom: nu
     }, arr.length + startingFrom);
 };
 
-export const sleep = async (ms: number): Promise<void> => {
-    return new Promise(resolve => {
-        setTimeout(resolve, ms);
-    });
-};
-
 export const getVideoClipLength = (device: Device): number => {
     let length = 60;
     const workingMode = device.getRawProperty(CommandType.CMD_SET_PIR_POWERMODE);

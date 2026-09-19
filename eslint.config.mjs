@@ -20,8 +20,6 @@ export default [
             'admin/blockly.js',
             '**/adapter-config.d.ts',
             'www/**/*',
-
-            'adapter-settings.js',
         ],
     },
     {
