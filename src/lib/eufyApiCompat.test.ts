@@ -1,8 +1,15 @@
 import { expect } from 'chai';
+import crypto from 'node:crypto';
+import path from 'node:path';
 import { HTTPApi, MegaHTTPApi } from 'eufy-security-client';
 import type { MegaResult } from 'eufy-security-client';
 
-import { applyEufyApiCompatibility, isIdentityRejected, normalizeSuccessCode } from './eufyApiCompat';
+import {
+    applyEufyApiCompatibility,
+    eufyClientOptions,
+    isIdentityRejected,
+    normalizeSuccessCode,
+} from './eufyApiCompat';
 
 describe('eufyApiCompat => normalizeSuccessCode', () => {
     it('should rewrite the HTTP style success code to the legacy one', () => {
@@ -125,5 +132,72 @@ describe('eufyApiCompat => applyEufyApiCompatibility', () => {
         const result = await mega.call('host', '/app/push/register_push_token', { token: 'fcm' });
         expect(result.code).to.equal(4404);
         expect(callArguments.length).to.equal(2);
+    });
+});
+
+describe('eufyApiCompat => eufyClientOptions', () => {
+    // The P2P key helpers are not exported by the package, so they are loaded from its build.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const p2pUtils = require(path.join(path.dirname(require.resolve('eufy-security-client')), 'p2p', 'utils.js')) as {
+        getNewRSAPrivateKey: (embedded?: boolean) => {
+            encrypt: (data: Buffer) => Buffer;
+            decrypt: (data: Buffer) => Buffer;
+            exportKey: (format: string) => string;
+        };
+        getRSAPrivateKey: (pem: string, embedded?: boolean) => { decrypt: (data: Buffer) => Buffer };
+    };
+    const aesKey = Buffer.from('0123456789abcdef');
+    const originalPrivateDecrypt = crypto.privateDecrypt;
+
+    // Simulates a node.js build that refuses PKCS#1 v1.5 private decryption (CVE-2023-46809),
+    // with the error text reported in iobroker-community-adapters/ioBroker.eusec#144.
+    beforeEach(() => {
+        (crypto as { privateDecrypt: unknown }).privateDecrypt = (
+            options: { padding?: number },
+            buffer: Buffer,
+        ): Buffer => {
+            if (options.padding === crypto.constants.RSA_PKCS1_PADDING) {
+                throw new TypeError('RSA_PKCS1_PADDING is no longer supported for private decryption');
+            }
+            return originalPrivateDecrypt(options as crypto.RsaPrivateKey, buffer);
+        };
+    });
+
+    afterEach(() => {
+        (crypto as { privateDecrypt: unknown }).privateDecrypt = originalPrivateDecrypt;
+    });
+
+    it('should reproduce the failure without the embedded PKCS#1 implementation', () => {
+        const key = p2pUtils.getNewRSAPrivateKey(false);
+        expect(() => key.decrypt(key.encrypt(aesKey))).to.throw(/RSA_PKCS1_PADDING/);
+    });
+
+    it('should decrypt a P2P stream key on such a node.js build', () => {
+        const key = p2pUtils.getNewRSAPrivateKey(eufyClientOptions.enableEmbeddedPKCS1Support);
+        expect(key.decrypt(key.encrypt(aesKey))).to.deep.equal(aesKey);
+    });
+
+    it('should decrypt with a station key imported from the cloud', () => {
+        const station = p2pUtils.getNewRSAPrivateKey(true);
+        const imported = p2pUtils.getRSAPrivateKey(
+            station.exportKey('pkcs8-private-pem'),
+            eufyClientOptions.enableEmbeddedPKCS1Support,
+        );
+        expect(imported.decrypt(station.encrypt(aesKey))).to.deep.equal(aesKey);
+    });
+
+    it('should decrypt a key of the minimum and maximum length PKCS#1 v1.5 allows', () => {
+        const key = p2pUtils.getNewRSAPrivateKey(eufyClientOptions.enableEmbeddedPKCS1Support);
+        // A 1024 bit key carries at most 128 - 11 bytes of payload.
+        for (const payload of [Buffer.alloc(1, 0x42), Buffer.alloc(117, 0x42)]) {
+            expect(key.decrypt(key.encrypt(payload))).to.deep.equal(payload);
+        }
+    });
+
+    it('should report a corrupted key instead of returning garbage', () => {
+        const key = p2pUtils.getNewRSAPrivateKey(eufyClientOptions.enableEmbeddedPKCS1Support);
+        const encrypted = key.encrypt(aesKey);
+        encrypted[0] ^= 0xff;
+        expect(() => key.decrypt(encrypted)).to.throw();
     });
 });

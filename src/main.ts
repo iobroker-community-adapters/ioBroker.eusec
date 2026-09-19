@@ -53,7 +53,7 @@ import {
 import type { PersistentData } from './lib/interfaces';
 import { describePictureData, getPictureExtension } from './lib/picture';
 import { ioBrokerLogger } from './lib/log';
-import { applyEufyApiCompatibility } from './lib/eufyApiCompat';
+import { applyEufyApiCompatibility, eufyClientOptions } from './lib/eufyApiCompat';
 import { buildPlayerUrl, streamToGo2rtcFailed } from './lib/go2rtc';
 import { streamToGo2rtc } from './lib/video';
 
@@ -305,6 +305,7 @@ export class euSec extends Adapter {
 
             if (this.config.username !== '' && this.config.password !== '') {
                 const config: EufySecurityConfig = {
+                    ...eufyClientOptions,
                     username: this.config.username,
                     password: this.config.password,
                     country: countryCode,
