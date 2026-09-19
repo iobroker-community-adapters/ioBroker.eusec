@@ -22,6 +22,7 @@
     "RTSP port": "RTSP端口",
     "RTSP Username": "RTSP用户名",
     "RTSP Password": "RTSP密码",
+    "Country": "国家",
     "inherited from ioBroker": "继承于 ioBroker",
     "Afghanistan": "阿富汗",
     "Albania": "阿尔巴尼亚",

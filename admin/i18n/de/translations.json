@@ -22,6 +22,7 @@
     "RTSP port": "RTSP Port",
     "RTSP Username": "RTSP Benutzername",
     "RTSP Password": "RTSP Passwort",
+    "Country": "Land",
     "inherited from ioBroker": "von ioBroker geerbt",
     "Afghanistan": "Afghanistan",
     "Albania": "Albanien",

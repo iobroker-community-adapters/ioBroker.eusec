@@ -21,6 +21,7 @@
     "WebRTC port": "WebRTC port",
     "RTSP port": "RTSP port",
     "RTSP Username": "RTSP Username",
+    "Country": "Country",
     "inherited from ioBroker": "inherited from ioBroker",
     "RTSP Password": "RTSP Password",
     "Afghanistan": "Afghanistan",
