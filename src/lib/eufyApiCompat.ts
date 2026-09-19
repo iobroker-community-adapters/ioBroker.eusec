@@ -70,10 +70,31 @@
  * push registration and every other v6 call.
  *
  * Remove this shim once the library retries an evicted identity itself.
+ *
+ * ## 4. RSA PKCS#1 v1.5 decryption
+ *
+ * Unlike the shims above this one is a client option, see eufyClientOptions. A camera hands out the
+ * AES key of its P2P stream RSA-encrypted with PKCS#1 v1.5 padding. node-rsa decrypts that with
+ * node's `crypto.privateDecrypt()`, which node builds without implicit rejection refuse since the
+ * fix for CVE-2023-46809:
+ *
+ *     [p2p] [P2PClientProtocol.handleDataBinaryAndVideo] Error: AES key could not be decrypted!
+ *     ... TypeError: RSA_PKCS1_PADDING is no longer supported for private decryption
+ *
+ * The whole stream is discarded then (iobroker-community-adapters/ioBroker.eusec#144). The old
+ * workaround, `--security-revert=CVE-2023-46809`, is rejected by node 22 and later.
+ * `enableEmbeddedPKCS1Support` makes node-rsa use its own JavaScript implementation instead, which
+ * works on every node build. The keys are 1024 bit and decrypted once per stream, so the slower
+ * implementation costs nothing noticeable.
  */
 
 import { HTTPApi, MegaHTTPApi, ResponseErrorCode } from 'eufy-security-client';
-import type { ApiResponse, HTTPApiRequest, MegaResult } from 'eufy-security-client';
+import type { ApiResponse, EufySecurityConfig, HTTPApiRequest, MegaResult } from 'eufy-security-client';
+
+/** Client options the adapter always passes to EufySecurity.initialize() - see section 4 above. */
+export const eufyClientOptions: Pick<EufySecurityConfig, 'enableEmbeddedPKCS1Support'> = {
+    enableEmbeddedPKCS1Support: true,
+};
 
 /** Legacy application success code of the Eufy API. */
 const LEGACY_SUCCESS_CODE = ResponseErrorCode.CODE_OK;
