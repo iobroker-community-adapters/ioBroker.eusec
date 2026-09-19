@@ -2,7 +2,7 @@
 {
     // To update the compilation target, install a different version of @tsconfig/node... and reference it here
     // https://github.com/tsconfig/bases#node-16-tsconfigjson
-    "extends": "@tsconfig/node22/tsconfig.json",
+    "extends": "@tsconfig/node24/tsconfig.json",
     "compileOnSave": true,
     "compilerOptions": {
         // do not compile anything, this file is just to configure type checking
@@ -13,7 +13,7 @@
         "allowJs": true,
         "checkJs": true,
 
-        // @tsconfig/node22 >= 22.0.6 sets "types": ["node"], which switches off the
+        // @tsconfig/node24 sets "types": ["node"], which switches off the
         // automatic inclusion of all @types packages => list the needed ones explicitly
         "types": ["node", "mocha"],
 
