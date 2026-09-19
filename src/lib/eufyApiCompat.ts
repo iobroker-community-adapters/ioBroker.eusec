@@ -10,6 +10,8 @@
  * 2. Legacy push check: a migrated account is rejected by the legacy push endpoint forever, but the
  *    rejection is logged as an error on every push reconnect - see applyEufyApiCompatibility().
  * 3. Stale v6 identity: a rejected identity is evicted but the failed call is not retried - same.
+ * 4. RSA PKCS#1 v1.5 decryption: a client option, see eufyClientOptions.
+ * 5. Unknown device types: devices the library does not know get no states - see applyEufyApiCompatibility().
  *
  * ## 1. Success code
  *
@@ -86,14 +88,84 @@
  * `enableEmbeddedPKCS1Support` makes node-rsa use its own JavaScript implementation instead, which
  * works on every node build. The keys are 1024 bit and decrypted once per stream, so the slower
  * implementation costs nothing noticeable.
+ *
+ * ## 5. Unknown device types
+ *
+ * The library creates an `UnknownDevice` without any states for device types it does not know. The
+ * eufyCam C31 (T817L, type 10031, iobroker-community-adapters/ioBroker.eusec#156) is one of them.
+ * Its owner reports that livestream, motion and person detection, light and alarm work once the type
+ * is replaced by 60 (`SOLO_CAMERA_SPOTLIGHT_1080`). The device and the station list are the only
+ * places the type comes from, so both are rewritten right after they are fetched. The raw params of
+ * such a device are logged once, since the library no longer logs it as unknown.
+ *
+ * Known limit: type 60 has no pan/tilt command and carries battery states the wired C31 lacks. A
+ * type of its own needs a C31 on the bench.
  */
 
-import { HTTPApi, MegaHTTPApi, ResponseErrorCode } from 'eufy-security-client';
-import type { ApiResponse, EufySecurityConfig, HTTPApiRequest, MegaResult } from 'eufy-security-client';
+import { DeviceType, HTTPApi, MegaHTTPApi, ResponseErrorCode } from 'eufy-security-client';
+import type {
+    ApiResponse,
+    DeviceListResponse,
+    EufySecurityConfig,
+    HTTPApiRequest,
+    MegaResult,
+    StationListResponse,
+} from 'eufy-security-client';
 
 /** Client options the adapter always passes to EufySecurity.initialize() - see section 4 above. */
 export const eufyClientOptions: Pick<EufySecurityConfig, 'enableEmbeddedPKCS1Support'> = {
     enableEmbeddedPKCS1Support: true,
+};
+
+/** Device types the library does not know, mapped to the known type that serves them best. */
+const DEVICE_TYPE_SUBSTITUTES: Readonly<Record<number, DeviceType>> = {
+    10031: DeviceType.SOLO_CAMERA_SPOTLIGHT_1080, // eufyCam C31 (T817L), see #156
+};
+
+/** An entry of a device or station list whose type was replaced, with the type it had before. */
+export interface SubstitutedEntry {
+    type: number;
+    entry: Record<string, unknown>;
+}
+
+/**
+ * Replaces unknown device types in a device or station list, in place.
+ *
+ * @param list The decrypted device or station list
+ * @returns The entries that were changed, each with its original type
+ */
+export const substituteDeviceTypes = (list: unknown): SubstitutedEntry[] => {
+    if (!Array.isArray(list)) {
+        return [];
+    }
+    const replaced: SubstitutedEntry[] = [];
+    for (const entry of list as Record<string, unknown>[]) {
+        const type = entry?.device_type;
+        const substitute = typeof type === 'number' ? DEVICE_TYPE_SUBSTITUTES[type] : undefined;
+        if (substitute !== undefined) {
+            replaced.push({ type: type as number, entry });
+            entry.device_type = substitute;
+        }
+    }
+    return replaced;
+};
+
+/**
+ * Describes a substituted device the way the library describes an unknown one, so its owner can
+ * post the parameters needed to give it a type of its own.
+ *
+ * @param substituted A device list entry returned by substituteDeviceTypes()
+ * @returns A log line with the identifying fields and the raw params
+ */
+export const describeSubstitutedDevice = (substituted: SubstitutedEntry): string => {
+    const { type, entry } = substituted;
+    return (
+        `Parameters of ${String(entry.device_name)} (type ${type}, model ${String(entry.device_model)}, ` +
+        `firmware ${String(entry.main_sw_version)}, hardware ${String(entry.main_hw_version)}) - please post them ` +
+        `in #156 with serial numbers, IP addresses, WLAN names, keys and tokens replaced by xxx: ${JSON.stringify(
+            entry.params,
+        )}`
+    );
 };
 
 /** Legacy application success code of the Eufy API. */
@@ -209,5 +281,40 @@ export const applyEufyApiCompatibility = (log: (message: string) => void): void 
             );
         }
         return originalCall.call(this, host, path, payload);
+    };
+
+    // 5. Give devices the library does not know a type it can handle.
+    const originalGetDeviceList = HTTPApi.prototype.getDeviceList;
+    const originalGetStationList = HTTPApi.prototype.getStationList;
+    const reportedDeviceTypes = new Set<number>();
+    const reportedDevices = new Set<unknown>();
+    const reportSubstitutes = (substituted: SubstitutedEntry[]): void => {
+        for (const { type } of substituted) {
+            if (!reportedDeviceTypes.has(type)) {
+                reportedDeviceTypes.add(type);
+                log(
+                    `Device type ${type} is not known to eufy-security-client. The adapter treats it as type ${DEVICE_TYPE_SUBSTITUTES[type]} - see #156.`,
+                );
+            }
+        }
+    };
+
+    HTTPApi.prototype.getDeviceList = async function (): Promise<DeviceListResponse[]> {
+        const devices = await originalGetDeviceList.call(this);
+        const substituted = substituteDeviceTypes(devices);
+        reportSubstitutes(substituted);
+        for (const device of substituted) {
+            if (!reportedDevices.has(device.entry.device_sn)) {
+                reportedDevices.add(device.entry.device_sn);
+                log(describeSubstitutedDevice(device));
+            }
+        }
+        return devices;
+    };
+
+    HTTPApi.prototype.getStationList = async function (): Promise<StationListResponse[]> {
+        const stations = await originalGetStationList.call(this);
+        reportSubstitutes(substituteDeviceTypes(stations));
+        return stations;
     };
 };
