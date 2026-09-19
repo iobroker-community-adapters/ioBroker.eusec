@@ -2,14 +2,70 @@ import { expect } from 'chai';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { HTTPApi, MegaHTTPApi } from 'eufy-security-client';
-import type { MegaResult } from 'eufy-security-client';
+import type { DeviceListResponse, MegaResult, StationListResponse } from 'eufy-security-client';
 
 import {
     applyEufyApiCompatibility,
     eufyClientOptions,
     isIdentityRejected,
+    describeSubstitutedDevice,
     normalizeSuccessCode,
+    substituteDeviceTypes,
 } from './eufyApiCompat';
+
+describe('eufyApiCompat => substituteDeviceTypes', () => {
+    it('should give the eufyCam C31 the type of the SoloCam Spotlight 1080', () => {
+        const list = [{ device_sn: 'T817L', device_type: 10031, params: [] }];
+        expect(substituteDeviceTypes(list)).to.deep.equal([{ type: 10031, entry: list[0] }]);
+        expect(list[0]).to.deep.equal({ device_sn: 'T817L', device_type: 60, params: [] });
+    });
+
+    it('should leave known and other unknown types untouched', () => {
+        const list = [{ device_type: 60 }, { device_type: 10030 }, { device_type: 0 }, { device_type: -1 }];
+        expect(substituteDeviceTypes(list)).to.deep.equal([]);
+        expect(list.map(entry => entry.device_type)).to.deep.equal([60, 10030, 0, -1]);
+    });
+
+    it('should not treat a type sent as a string as a number', () => {
+        const list = [{ device_type: '10031' }];
+        expect(substituteDeviceTypes(list)).to.deep.equal([]);
+        expect(list[0].device_type).to.equal('10031');
+    });
+
+    it('should skip broken entries and ignore values that are not lists', () => {
+        expect(substituteDeviceTypes([null, undefined, 'x', {}, { device_type: 10031 }])).to.deep.equal([
+            { type: 10031, entry: { device_type: 60 } },
+        ]);
+        expect(substituteDeviceTypes(undefined)).to.deep.equal([]);
+        expect(substituteDeviceTypes(null)).to.deep.equal([]);
+        expect(substituteDeviceTypes({ device_type: 10031 })).to.deep.equal([]);
+        expect(substituteDeviceTypes([])).to.deep.equal([]);
+    });
+});
+
+describe('eufyApiCompat => describeSubstitutedDevice', () => {
+    it('should name the device and carry its raw params', () => {
+        const line = describeSubstitutedDevice({
+            type: 10031,
+            entry: {
+                device_name: 'Einfahrt',
+                device_model: 'T817L',
+                main_sw_version: '1.0.4',
+                main_hw_version: 'P1',
+                params: [{ param_type: 1011, param_value: '1' }],
+            },
+        });
+        expect(line).to.include('Einfahrt (type 10031, model T817L, firmware 1.0.4, hardware P1)');
+        expect(line).to.include('#156');
+        expect(line).to.include('[{"param_type":1011,"param_value":"1"}]');
+    });
+
+    it('should not throw on an entry without any fields', () => {
+        expect(describeSubstitutedDevice({ type: 10031, entry: {} })).to.include(
+            'undefined (type 10031, model undefined',
+        );
+    });
+});
 
 describe('eufyApiCompat => normalizeSuccessCode', () => {
     it('should rewrite the HTTP style success code to the legacy one', () => {
@@ -81,6 +137,15 @@ describe('eufyApiCompat => applyEufyApiCompatibility', () => {
             callArguments.push([host, path, payload]);
             return Promise.resolve(callResults[callArguments.length - 1]);
         };
+        HTTPApi.prototype.getDeviceList = function (): Promise<DeviceListResponse[]> {
+            return Promise.resolve([
+                { device_sn: 'T8170', device_type: 10031, params: [] },
+                { device_sn: 'T8000', device_type: 1, params: [] },
+            ] as unknown as DeviceListResponse[]);
+        };
+        HTTPApi.prototype.getStationList = function (): Promise<StationListResponse[]> {
+            return Promise.resolve([{ device_type: 10031 }] as StationListResponse[]);
+        };
         applyEufyApiCompatibility(message => messages.push(message));
     });
 
@@ -132,6 +197,14 @@ describe('eufyApiCompat => applyEufyApiCompatibility', () => {
         const result = await mega.call('host', '/app/push/register_push_token', { token: 'fcm' });
         expect(result.code).to.equal(4404);
         expect(callArguments.length).to.equal(2);
+    });
+
+    it('should substitute unknown device types in the device and the station list', async () => {
+        expect((await api.getDeviceList()).map(device => device.device_type)).to.deep.equal([60, 1]);
+        expect((await api.getStationList()).map(station => station.device_type)).to.deep.equal([60]);
+        await api.getDeviceList();
+        expect(messages.filter(message => message.includes('Device type 10031')).length, 'logged once').to.equal(1);
+        expect(messages.filter(message => message.startsWith('Parameters of')).length, 'once per device').to.equal(1);
     });
 });
 
