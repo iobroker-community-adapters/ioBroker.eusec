@@ -60,6 +60,7 @@ export const DeviceStateID = {
     CALIBRATE: 'calibrate',
     UNLOCK: 'unlock',
     OPEN_BOX: 'open_box',
+    TALKBACK_PLAY: 'talkback_play',
 };
 
 export const StationStateID = {

@@ -35,7 +35,7 @@ import {
 } from 'eufy-security-client';
 import { getAlpha2Code as getCountryCode } from 'i18n-iso-countries';
 import { isValid as isValidLanguageCode } from '@cospired/i18n-iso-languages';
-import type { Readable } from 'node:stream';
+import type { Readable, Writable } from 'node:stream';
 import util from 'node:util';
 import childProcess from 'node:child_process';
 import pathToGo2rtc from 'go2rtc-static';
@@ -61,6 +61,7 @@ import {
 } from './lib/eufyApiCompat';
 import { buildPlayerUrl, streamToGo2rtcFailed } from './lib/go2rtc';
 import { streamToGo2rtc } from './lib/video';
+import { parseTalkbackSource, pipeToTalkback, talkbackFfmpegArgs, waitForDeviceEvent } from './lib/talkback';
 
 /** Restart backoff for go2rtc: 1s, 2s, 4s ... capped, reset once it stayed up for a while. */
 const GO2RTC_RESTART_DELAY_MIN = 1000;
@@ -94,6 +95,8 @@ export class euSec extends Adapter {
     private go2rtcRestartTimeout: ioBroker.Timeout | undefined = undefined;
     private go2rtcRestarts = 0;
     private terminating = false;
+    /** Running talkbacks by device serial; aborting one stops its encoder. */
+    private readonly talkbacks = new Map<string, AbortController>();
 
     public constructor(options: Partial<AdapterOptions> = {}) {
         super({
@@ -542,6 +545,9 @@ export class euSec extends Adapter {
             // into a shutting down adapter.
             this.terminating = true;
             this.stopGo2rtc();
+            for (const talkback of this.talkbacks.values()) {
+                talkback.abort();
+            }
 
             // No writePersistentData() here: persistentData only ever changes in the version
             // update path, which writes it itself. Writing it again on unload raced the closing
@@ -678,6 +684,10 @@ export class euSec extends Adapter {
                             break;
                         case DeviceStateID.STOP_STREAM:
                             await this.stopLivestream(device_sn);
+                            break;
+                        case DeviceStateID.TALKBACK_PLAY:
+                            // Runs as long as the audio plays, so it is not awaited here.
+                            void this.playTalkback(device_sn, state.val, id);
                             break;
                         case DeviceStateID.TRIGGER_ALARM_SOUND:
                             station.triggerDeviceAlarmSound(device, this.config.alarmSoundDuration);
@@ -1417,6 +1427,19 @@ export class euSec extends Adapter {
                 native: {},
             });
         }
+        if (device.hasCommand(CommandName.DeviceStartTalkback)) {
+            await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.TALKBACK_PLAY), {
+                type: 'state',
+                common: {
+                    name: 'Play audio through the speaker (http(s) URL or absolute file path)',
+                    type: 'string',
+                    role: 'text',
+                    read: true,
+                    write: true,
+                },
+                native: {},
+            });
+        }
         if (device.hasCommand(CommandName.DeviceStartLivestream)) {
             // Start Stream
             await this.setObjectNotExistsAsync(device.getStateID(DeviceStateID.START_STREAM), {
@@ -2129,6 +2152,71 @@ export class euSec extends Adapter {
         }
     }
 
+    /**
+     * Plays an audio file or URL through the speaker of a device. Starts a livestream first if none
+     * is running, because the library only allows talkback during one, and stops it again afterwards.
+     *
+     * @param device_sn The serial number of the device
+     * @param value What was written to the talkback_play state
+     * @param stateId The id of that state, acknowledged when the audio was played
+     */
+    private async playTalkback(device_sn: string, value: ioBroker.StateValue, stateId: string): Promise<void> {
+        const source = parseTalkbackSource(value);
+        if (source === undefined) {
+            this.logger.warn(
+                `Talkback for device ${device_sn}: "${String(value)}" is neither an http(s) URL nor an absolute file path.`,
+            );
+            return;
+        }
+        if (this.talkbacks.has(device_sn)) {
+            this.logger.warn(`Talkback for device ${device_sn} is already playing - "${source}" is ignored.`);
+            return;
+        }
+        const talkback = new AbortController();
+        this.talkbacks.set(device_sn, talkback);
+        let startedLivestream = false;
+        let startedTalkback = false;
+        let device: Device | undefined;
+        let station: Station | undefined;
+        try {
+            device = await this.eufy.getDevice(device_sn);
+            station = await this.eufy.getStation(device.getStationSerial());
+            if (!station.isLiveStreaming(device)) {
+                const livestreamStarted = waitForDeviceEvent(this.eufy, 'station livestream start', device_sn, 30000);
+                startedLivestream = true;
+                await this.startLivestream(device_sn);
+                await livestreamStarted;
+            }
+            const talkbackStarted = waitForDeviceEvent(this.eufy, 'station talkback start', device_sn, 15000);
+            await this.eufy.startStationTalkback(device_sn);
+            const [, , talkbackStream] = await talkbackStarted;
+            startedTalkback = true;
+            this.logger.info(`Talkback for device ${device_sn}: playing "${source}"...`);
+            await pipeToTalkback(
+                pathToFfmpeg || 'ffmpeg',
+                talkbackFfmpegArgs(source),
+                talkbackStream as Writable,
+                talkback.signal,
+            );
+            await this.setStateAsync(stateId, { val: source, ack: true });
+        } catch (error) {
+            this.logger.error(`Talkback for device ${device_sn} - Error`, error);
+        } finally {
+            this.talkbacks.delete(device_sn);
+            // The livestream may have ended already, e.g. after maxLivestreamDuration.
+            if (!this.terminating && device && station?.isLiveStreaming(device)) {
+                if (startedTalkback) {
+                    await this.eufy.stopStationTalkback(device_sn).catch(error => {
+                        this.logger.error(`Talkback for device ${device_sn} - Error during stopping talkback`, error);
+                    });
+                }
+                if (startedLivestream) {
+                    await this.stopLivestream(device_sn);
+                }
+            }
+        }
+    }
+
     private async onStationLivestreamStart(
         station: Station,
         device: Device,
@@ -2183,6 +2271,8 @@ export class euSec extends Adapter {
     }
 
     private async onStationLivestreamStop(_station: Station, device: Device): Promise<void> {
+        // Talkback only works during a livestream.
+        this.talkbacks.get(device.getSerial())?.abort();
         try {
             await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM), { val: '', ack: true });
             await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP), { val: '', ack: true });
