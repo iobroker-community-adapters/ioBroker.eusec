@@ -10,6 +10,8 @@
     "Only local connection": "仅本地连接",
     "Quickest connection": "最快的连接",
     "Accept incoming invitations": "接受收到的邀请",
+    "Battery devices that stay connected": "保持连接的电池设备",
+    "Serial numbers of standalone battery devices on permanent power (power supply or solar panel). Their P2P connection is not closed after 30 seconds. Drains the battery of a device that is not on permanent power.": "使用常供电（电源适配器或太阳能板）的独立电池设备的序列号。其 P2P 连接不会在 30 秒后断开。对未常供电的设备会耗尽电池。",
     "Alarm sound duration (sec)": "警报声持续时间（秒",
     "Livestream settings": "直播设置",
     "Max camera livestream duration (sec)": "相机直播的最大持续时间（秒；0 = 无限）",

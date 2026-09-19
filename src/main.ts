@@ -53,7 +53,12 @@ import {
 import type { PersistentData } from './lib/interfaces';
 import { describePictureData, getPictureExtension } from './lib/picture';
 import { ioBrokerLogger } from './lib/log';
-import { applyEufyApiCompatibility, eufyClientOptions } from './lib/eufyApiCompat';
+import {
+    applyEufyApiCompatibility,
+    eufyClientOptions,
+    keepStationsConnected,
+    parseSerialList,
+} from './lib/eufyApiCompat';
 import { buildPlayerUrl, streamToGo2rtcFailed } from './lib/go2rtc';
 import { streamToGo2rtc } from './lib/video';
 
@@ -332,6 +337,7 @@ export class euSec extends Adapter {
                 };
 
                 // Must happen before initialize(), the first API call is made during login.
+                keepStationsConnected(parseSerialList(this.config.keepConnectedStations));
                 applyEufyApiCompatibility(message => this.logger.info(message));
 
                 this.eufy = await EufySecurity.initialize(config, this.logger);

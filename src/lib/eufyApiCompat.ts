@@ -12,6 +12,7 @@
  * 3. Stale v6 identity: a rejected identity is evicted but the failed call is not retried - same.
  * 4. RSA PKCS#1 v1.5 decryption: a client option, see eufyClientOptions.
  * 5. Unknown device types: devices the library does not know get no states - see applyEufyApiCompatibility().
+ * 6. Kept P2P connection: battery devices on permanent power can opt out of the 30s disconnect - same.
  *
  * ## 1. Success code
  *
@@ -100,9 +101,22 @@
  *
  * Known limit: type 60 has no pan/tilt command and carries battery states the wired C31 lacks. A
  * type of its own needs a C31 on the bench.
+ *
+ * ## 6. Kept P2P connection
+ *
+ * The library marks every device type with a battery as an energy saving device and closes its P2P
+ * connection 30 seconds after the last command, whether the device runs on its battery or on a power
+ * supply or solar panel (iobroker-community-adapters/ioBroker.eusec#33). Every later command and
+ * stream has to reconnect first. `P2PClientProtocol.updateRawStation()` is where the flag is set,
+ * from the station list, so the stations configured in `keepConnectedStations` get it cleared right
+ * after. The library then treats them like a mains powered station: no 30 second disconnect, and a
+ * reconnect whenever the connection drops.
+ *
+ * This is an opt-in, not a correction: on a device that really runs on its battery it drains the
+ * battery. Remove it once the library offers such an option itself.
  */
 
-import { DeviceType, HTTPApi, MegaHTTPApi, ResponseErrorCode } from 'eufy-security-client';
+import { DeviceType, HTTPApi, MegaHTTPApi, P2PClientProtocol, ResponseErrorCode } from 'eufy-security-client';
 import type {
     ApiResponse,
     DeviceListResponse,
@@ -215,6 +229,37 @@ export const normalizeSuccessCode = (data: unknown): boolean => {
     return true;
 };
 
+/** Serial numbers of the stations whose P2P connection stays open - see section 6 above. */
+const keptStations = new Set<string>();
+
+/**
+ * Normalizes the `keepConnectedStations` setting to a list of serial numbers. Admin stores it as an
+ * array; a comma separated string is accepted as well.
+ *
+ * @param value The setting as read from the instance configuration
+ * @returns The trimmed, upper case serial numbers without duplicates or empty entries
+ */
+export const parseSerialList = (value: unknown): string[] => {
+    const items: unknown[] = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : [];
+    const serials = items
+        .filter((item): item is string => typeof item === 'string')
+        .map(item => item.trim().toUpperCase())
+        .filter(item => item !== '');
+    return [...new Set(serials)];
+};
+
+/**
+ * Sets the stations whose P2P connection stays open, replacing the previous list.
+ *
+ * @param serials Serial numbers as returned by parseSerialList()
+ */
+export const keepStationsConnected = (serials: string[]): void => {
+    keptStations.clear();
+    for (const serial of serials) {
+        keptStations.add(serial);
+    }
+};
+
 let patched = false;
 
 /**
@@ -316,5 +361,26 @@ export const applyEufyApiCompatibility = (log: (message: string) => void): void 
         const stations = await originalGetStationList.call(this);
         reportSubstitutes(substituteDeviceTypes(stations));
         return stations;
+    };
+
+    // 6. Keep the P2P connection of the configured battery devices open.
+    const originalUpdateRawStation = P2PClientProtocol.prototype.updateRawStation;
+    const reportedKeptStations = new Set<string>();
+
+    P2PClientProtocol.prototype.updateRawStation = function (value: StationListResponse): void {
+        originalUpdateRawStation.call(this, value);
+        // The flag is private in the typings; it is a plain field at runtime.
+        const session = this as unknown as { energySavingDevice: boolean };
+        const serial = value?.station_sn;
+        if (!session.energySavingDevice || !keptStations.has(serial)) {
+            return;
+        }
+        session.energySavingDevice = false;
+        if (!reportedKeptStations.has(serial)) {
+            reportedKeptStations.add(serial);
+            log(
+                `Station ${serial} is a battery device, but it is configured to stay connected: its P2P connection is kept open and reopened when it drops, which drains the battery if the device is not on permanent power.`,
+            );
+        }
     };
 };

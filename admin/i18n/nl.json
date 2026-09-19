@@ -10,6 +10,8 @@
     "Only local connection": "Alleen lokale verbinding",
     "Quickest connection": "Snelste verbinding",
     "Accept incoming invitations": "Accepteer inkomende uitnodigingen",
+    "Battery devices that stay connected": "Apparaten op batterij die verbonden blijven",
+    "Serial numbers of standalone battery devices on permanent power (power supply or solar panel). Their P2P connection is not closed after 30 seconds. Drains the battery of a device that is not on permanent power.": "Serienummers van zelfstandige apparaten op batterij met vaste voeding (voedingsadapter of zonnepaneel). Hun P2P-verbinding wordt niet na 30 seconden verbroken. Put de batterij uit van een apparaat zonder vaste voeding.",
     "Alarm sound duration (sec)": "Duur alarmgeluid (sec)",
     "Livestream settings": "Livestream-instellingen",
     "Max camera livestream duration (sec)": "Max. Duur livestream camera (sec; 0 = onbeperkt)",

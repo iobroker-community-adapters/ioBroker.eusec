@@ -10,6 +10,8 @@
     "Only local connection": "Tylko połączenie lokalne",
     "Quickest connection": "Najszybsze połączenie",
     "Accept incoming invitations": "Przyjmowanie zaproszeń przychodzących",
+    "Battery devices that stay connected": "Urządzenia akumulatorowe, które pozostają połączone",
+    "Serial numbers of standalone battery devices on permanent power (power supply or solar panel). Their P2P connection is not closed after 30 seconds. Drains the battery of a device that is not on permanent power.": "Numery seryjne samodzielnych urządzeń akumulatorowych ze stałym zasilaniem (zasilacz lub panel słoneczny). Ich połączenie P2P nie jest zamykane po 30 sekundach. Rozładowuje akumulator urządzenia bez stałego zasilania.",
     "Alarm sound duration (sec)": "Czas trwania dźwięku alarmu (sek.)",
     "Livestream settings": "Ustawienia transmisji na żywo",
     "Max camera livestream duration (sec)": "Maksymalny czas trwania transmisji na żywo z kamery (s; 0 = bez ograniczeń)",

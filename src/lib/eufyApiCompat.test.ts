@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { HTTPApi, MegaHTTPApi } from 'eufy-security-client';
+import { HTTPApi, MegaHTTPApi, P2PClientProtocol } from 'eufy-security-client';
 import type { DeviceListResponse, MegaResult, StationListResponse } from 'eufy-security-client';
 
 import {
@@ -9,9 +9,37 @@ import {
     eufyClientOptions,
     isIdentityRejected,
     describeSubstitutedDevice,
+    keepStationsConnected,
     normalizeSuccessCode,
+    parseSerialList,
     substituteDeviceTypes,
 } from './eufyApiCompat';
+
+describe('eufyApiCompat => parseSerialList', () => {
+    it('should trim, upper case and deduplicate the serial numbers of an array', () => {
+        expect(parseSerialList([' t8113n1234 ', 'T8113N1234', 'T8210P5678'])).to.deep.equal([
+            'T8113N1234',
+            'T8210P5678',
+        ]);
+    });
+
+    it('should accept a comma separated string', () => {
+        expect(parseSerialList('T8113N1234, t8210p5678,,')).to.deep.equal(['T8113N1234', 'T8210P5678']);
+    });
+
+    it('should drop empty entries and entries that are not strings', () => {
+        expect(parseSerialList(['', '   ', 42, null, undefined, {}, ['T1'], 'T2'])).to.deep.equal(['T2']);
+    });
+
+    it('should return an empty list for a missing or malformed setting', () => {
+        expect(parseSerialList(undefined)).to.deep.equal([]);
+        expect(parseSerialList(null)).to.deep.equal([]);
+        expect(parseSerialList('')).to.deep.equal([]);
+        expect(parseSerialList(42)).to.deep.equal([]);
+        expect(parseSerialList({ 0: 'T1' })).to.deep.equal([]);
+        expect(parseSerialList([])).to.deep.equal([]);
+    });
+});
 
 describe('eufyApiCompat => substituteDeviceTypes', () => {
     it('should give the eufyCam C31 the type of the SoloCam Spotlight 1080', () => {
@@ -146,6 +174,12 @@ describe('eufyApiCompat => applyEufyApiCompatibility', () => {
         HTTPApi.prototype.getStationList = function (): Promise<StationListResponse[]> {
             return Promise.resolve([{ device_type: 10031 }] as StationListResponse[]);
         };
+        // Stands in for the library: a station list entry with a battery makes it an energy saving device.
+        P2PClientProtocol.prototype.updateRawStation = function (value: StationListResponse): void {
+            (this as unknown as { energySavingDevice: boolean }).energySavingDevice = (
+                value as unknown as { battery: boolean }
+            ).battery;
+        };
         applyEufyApiCompatibility(message => messages.push(message));
     });
 
@@ -205,6 +239,49 @@ describe('eufyApiCompat => applyEufyApiCompatibility', () => {
         await api.getDeviceList();
         expect(messages.filter(message => message.includes('Device type 10031')).length, 'logged once').to.equal(1);
         expect(messages.filter(message => message.startsWith('Parameters of')).length, 'once per device').to.equal(1);
+    });
+
+    describe('kept P2P connection', () => {
+        const update = (serial: unknown, battery: boolean): boolean => {
+            const session = Object.create(P2PClientProtocol.prototype) as P2PClientProtocol;
+            session.updateRawStation({ station_sn: serial, battery } as unknown as StationListResponse);
+            return session.isEnergySavingDevice();
+        };
+        const keptMessages = (serial: string): number =>
+            messages.filter(message => message.startsWith(`Station ${serial} is a battery device`)).length;
+
+        afterEach(() => keepStationsConnected([]));
+
+        it('should keep a configured battery device connected and say so once', () => {
+            keepStationsConnected(['T8113N1234']);
+            expect(update('T8113N1234', true)).to.equal(false);
+            expect(update('T8113N1234', true), 'after every station list refresh').to.equal(false);
+            expect(keptMessages('T8113N1234')).to.equal(1);
+        });
+
+        it('should leave battery devices that are not configured alone', () => {
+            keepStationsConnected(['T8113N1234']);
+            expect(update('T8210P5678', true)).to.equal(true);
+            expect(keptMessages('T8210P5678')).to.equal(0);
+        });
+
+        it('should not report a configured device that is not an energy saving device', () => {
+            keepStationsConnected(['T8030P0000']);
+            expect(update('T8030P0000', false)).to.equal(false);
+            expect(keptMessages('T8030P0000')).to.equal(0);
+        });
+
+        it('should replace the list instead of adding to it', () => {
+            keepStationsConnected(['T8113N1234']);
+            keepStationsConnected(['T8210P5678']);
+            expect(update('T8113N1234', true)).to.equal(true);
+            expect(update('T8210P5678', true)).to.equal(false);
+        });
+
+        it('should survive a station list entry without a serial number', () => {
+            keepStationsConnected(['T8113N1234']);
+            expect(update(undefined, true)).to.equal(true);
+        });
     });
 });
 

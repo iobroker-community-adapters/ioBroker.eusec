@@ -10,6 +10,8 @@
     "Only local connection": "Только локальное подключение",
     "Quickest connection": "Самое быстрое соединение",
     "Accept incoming invitations": "Принимать входящие приглашения",
+    "Battery devices that stay connected": "Устройства с аккумулятором, которые остаются подключёнными",
+    "Serial numbers of standalone battery devices on permanent power (power supply or solar panel). Their P2P connection is not closed after 30 seconds. Drains the battery of a device that is not on permanent power.": "Серийные номера автономных устройств с аккумулятором и постоянным питанием (блок питания или солнечная панель). Их P2P-соединение не закрывается через 30 секунд. Разряжает аккумулятор устройства без постоянного питания.",
     "Alarm sound duration (sec)": "Длительность звукового сигнала тревоги (сек)",
     "Livestream settings": "Настройки прямой трансляции",
     "Max camera livestream duration (sec)": "Максимальная продолжительность прямой трансляции с камеры (сек; 0 = неограниченно)",

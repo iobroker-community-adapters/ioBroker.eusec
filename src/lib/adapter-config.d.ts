@@ -13,6 +13,7 @@ declare global {
             verificationMethod: number;
             p2pConnectionType: string;
             acceptInvitations: boolean;
+            keepConnectedStations: string[];
             alarmSoundDuration: number;
             go2rtc_api_port: number;
             go2rtc_rtsp_port: number;
