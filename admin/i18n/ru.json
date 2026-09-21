@@ -25,7 +25,7 @@
     "RTSP Username": "RTSP Имя пользователя",
     "RTSP Password": "Пароль RTSP",
     "Devices with a compatibility stream": "Устройства с потоком совместимости",
-    "Serial numbers of cameras whose livestream is re-encoded to 1280x720 H.264 before it reaches the player. For old WebViews, kiosk tablets and picky hardware decoders that cannot handle the resolution the camera sends. Costs CPU on the ioBroker host while such a stream is watched.": "Серийные номера камер, чья прямая трансляция перекодируется в H.264 1280x720 перед воспроизведением. Для старых WebView, планшетов в режиме киоска и привередливых аппаратных декодеров, которые не справляются с разрешением камеры. Нагружает процессор хоста ioBroker, пока такой поток просматривается.",
+    "Serial numbers of cameras whose livestream is re-encoded to 720p H.264 before it reaches the player. For old WebViews, kiosk tablets and picky hardware decoders that cannot handle the resolution the camera sends. Costs CPU on the ioBroker host while such a stream is watched.": "Серийные номера камер, чья прямая трансляция перекодируется в H.264 720p перед воспроизведением. Для старых WebView, планшетов в режиме киоска и привередливых аппаратных декодеров, которые не справляются с разрешением камеры. Нагружает процессор хоста ioBroker, пока такой поток просматривается.",
     "Country": "Страна",
     "inherited from ioBroker": "наследуется от ioBroker",
     "Afghanistan": "Афганистан",

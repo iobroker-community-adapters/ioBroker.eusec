@@ -50,6 +50,14 @@ describe('go2rtc => go2rtcStreamName', () => {
     });
 
     it('should build the compatibility stream from the stream the device pushes into', () => {
-        expect(compatStreamSource('T84A1P00')).to.equal('ffmpeg:T84A1P00#video=h264#width=1280#height=720#audio=copy');
+        expect(compatStreamSource('T84A1P00')).to.match(/^ffmpeg:T84A1P00#video=h264#.*#audio=copy$/);
+    });
+
+    it('should fix only the height of the compatibility stream, so the aspect ratio is kept', () => {
+        // go2rtc makes "scale=<width>:<height>" of these; 1280x720 stretched 4:3 cameras to 16:9.
+        const source = compatStreamSource('T84A1P00');
+        expect(source).to.include('#height=720');
+        expect(source).to.include('#width=-2');
+        expect(source).not.to.match(/#width=\d/);
     });
 });

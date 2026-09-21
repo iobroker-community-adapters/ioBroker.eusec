@@ -25,7 +25,7 @@
     "RTSP Username": "RTSP用户名",
     "RTSP Password": "RTSP密码",
     "Devices with a compatibility stream": "使用兼容流的设备",
-    "Serial numbers of cameras whose livestream is re-encoded to 1280x720 H.264 before it reaches the player. For old WebViews, kiosk tablets and picky hardware decoders that cannot handle the resolution the camera sends. Costs CPU on the ioBroker host while such a stream is watched.": "需要在播放前将实时流转码为 1280x720 H.264 的摄像头序列号。适用于旧版 WebView、自助终端平板，以及无法处理摄像头原始分辨率的挑剔硬件解码器。观看此类流时会占用 ioBroker 主机的 CPU。",
+    "Serial numbers of cameras whose livestream is re-encoded to 720p H.264 before it reaches the player. For old WebViews, kiosk tablets and picky hardware decoders that cannot handle the resolution the camera sends. Costs CPU on the ioBroker host while such a stream is watched.": "需要在播放前将实时流转码为 720p H.264 的摄像头序列号。适用于旧版 WebView、自助终端平板，以及无法处理摄像头原始分辨率的挑剔硬件解码器。观看此类流时会占用 ioBroker 主机的 CPU。",
     "Country": "国家",
     "inherited from ioBroker": "继承于 ioBroker",
     "Afghanistan": "阿富汗",

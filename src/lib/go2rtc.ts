@@ -61,14 +61,19 @@ export const go2rtcStreamName = (serial: string, compatSerials: string[]): strin
 
 /**
  * go2rtc source of the compatibility stream: the untouched stream of the device, re-encoded to
- * 1280x720 H.264. Audio is copied, so it stays what the camera sent. go2rtc starts one ffmpeg per
+ * 720p H.264. Audio is copied, so it stays what the camera sent. go2rtc starts one ffmpeg per
  * viewer of this stream, which is why it is opt-in per device.
+ *
+ * Only the height is fixed. go2rtc 1.9.4 turns width and height into `scale=<width>:<height>`,
+ * so a fixed 1280x720 stretched the 4:3 picture of the cameras (2048x1536, 1600x1200) to 16:9.
+ * A width of -2 lets ffmpeg keep the aspect ratio and round the width to an even number, which
+ * the H.264 encoder requires; -1 could produce an odd width.
  *
  * @param serial Serial of the device
  * @returns The source string for the go2rtc configuration
  */
 export const compatStreamSource = (serial: string): string =>
-    `ffmpeg:${serial}#video=h264#width=1280#height=720#audio=copy`;
+    `ffmpeg:${serial}#video=h264#width=-2#height=720#audio=copy`;
 
 /**
  * Builds the URL of the livestream player page. The page is served by go2rtc itself, because

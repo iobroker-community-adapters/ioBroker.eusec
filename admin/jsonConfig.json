@@ -1244,7 +1244,7 @@
                     "newLine": true,
                     "type": "chips",
                     "label": "Devices with a compatibility stream",
-                    "help": "Serial numbers of cameras whose livestream is re-encoded to 1280x720 H.264 before it reaches the player. For old WebViews, kiosk tablets and picky hardware decoders that cannot handle the resolution the camera sends. Costs CPU on the ioBroker host while such a stream is watched.",
+                    "help": "Serial numbers of cameras whose livestream is re-encoded to 720p H.264 before it reaches the player. For old WebViews, kiosk tablets and picky hardware decoders that cannot handle the resolution the camera sends. Costs CPU on the ioBroker host while such a stream is watched.",
                     "xs": 12,
                     "sm": 12,
                     "md": 12,
