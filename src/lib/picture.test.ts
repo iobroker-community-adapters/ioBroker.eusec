@@ -1,7 +1,7 @@
 import { expect } from 'chai';
-import type { Picture } from 'eufy-security-client';
+import { CommandName, PropertyName, type Picture, type PropertyValue } from 'eufy-security-client';
 
-import { describePictureData, getPictureExtension } from './picture';
+import { describePictureData, getPictureExtension, schedulePictureOverP2P } from './picture';
 
 const JPEG_HEAD = Buffer.from('ffd8ffe000104a464946', 'hex');
 
@@ -68,5 +68,93 @@ describe('picture => describePictureData', () => {
         expect(describePictureData(undefined)).to.equal('no data');
         expect(describePictureData(Buffer.alloc(0))).to.equal('no data');
         expect(describePictureData('v8_eufysecurity:')).to.equal('no data');
+    });
+});
+
+interface Fakes {
+    queries: string[];
+    timers: { callback: () => void; ms: number }[];
+    station: { hasCommand: (command: CommandName) => boolean; databaseQueryLatestInfo: () => void };
+    device: { getSerial: () => string; getPropertyValue: (name: PropertyName) => PropertyValue };
+    setTimer: (callback: () => void, ms: number) => void;
+}
+
+describe('picture => schedulePictureOverP2P', () => {
+    const fakes = function (
+        properties: Record<string, unknown> = {},
+        commands = [CommandName.StationDatabaseQueryLatestInfo],
+    ): Fakes {
+        const queries: string[] = [];
+        const timers: { callback: () => void; ms: number }[] = [];
+        return {
+            queries,
+            timers,
+            station: {
+                hasCommand: (command: CommandName): boolean => commands.includes(command),
+                databaseQueryLatestInfo: (): void => void queries.push('query'),
+            },
+            device: {
+                getSerial: (): string => 'T8113',
+                // Boundary data from the client is untyped; the fake hands out invalid values on purpose.
+                getPropertyValue: (name: PropertyName): PropertyValue => properties[name] as PropertyValue,
+            },
+            setTimer: (callback: () => void, ms: number): void => void timers.push({ callback, ms }),
+        };
+    };
+
+    it('should query the station over P2P after 60 seconds by default (#136)', () => {
+        const f = fakes();
+        expect(schedulePictureOverP2P(f.station, f.device, new Set(), f.setTimer)).to.equal(true);
+        expect(f.timers.map(t => t.ms)).to.deep.equal([60_000]);
+        expect(f.queries).to.deep.equal([]);
+        f.timers[0].callback();
+        expect(f.queries).to.deep.equal(['query']);
+    });
+
+    it('should wait for the custom clip length in working mode 2', () => {
+        const f = fakes({ [PropertyName.DevicePowerWorkingMode]: 2, [PropertyName.DeviceRecordingClipLength]: 5 });
+        schedulePictureOverP2P(f.station, f.device, new Set(), f.setTimer);
+        expect(f.timers[0].ms).to.equal(5_000);
+    });
+
+    it('should ignore the clip length outside working mode 2', () => {
+        const f = fakes({ [PropertyName.DevicePowerWorkingMode]: 1, [PropertyName.DeviceRecordingClipLength]: 5 });
+        schedulePictureOverP2P(f.station, f.device, new Set(), f.setTimer);
+        expect(f.timers[0].ms).to.equal(60_000);
+    });
+
+    it('should fall back to 60 seconds for an invalid clip length and cap a huge one', () => {
+        for (const clipLength of [0, -5, NaN, Infinity, '30', undefined]) {
+            const f = fakes({
+                [PropertyName.DevicePowerWorkingMode]: 2,
+                [PropertyName.DeviceRecordingClipLength]: clipLength,
+            });
+            schedulePictureOverP2P(f.station, f.device, new Set(), f.setTimer);
+            expect(f.timers[0].ms, String(clipLength)).to.equal(60_000);
+        }
+        const f = fakes({
+            [PropertyName.DevicePowerWorkingMode]: 2,
+            [PropertyName.DeviceRecordingClipLength]: 100_000,
+        });
+        schedulePictureOverP2P(f.station, f.device, new Set(), f.setTimer);
+        expect(f.timers[0].ms).to.equal(300_000);
+    });
+
+    it('should not schedule a second query while one is pending, but again after it ran', () => {
+        const f = fakes();
+        const pending = new Set<string>();
+        expect(schedulePictureOverP2P(f.station, f.device, pending, f.setTimer)).to.equal(true);
+        expect(schedulePictureOverP2P(f.station, f.device, pending, f.setTimer)).to.equal(true);
+        expect(f.timers).to.have.length(1);
+        f.timers[0].callback();
+        expect(pending.size).to.equal(0);
+        schedulePictureOverP2P(f.station, f.device, pending, f.setTimer);
+        expect(f.timers).to.have.length(2);
+    });
+
+    it('should not schedule anything for a station without the P2P picture query', () => {
+        const f = fakes({}, []);
+        expect(schedulePictureOverP2P(f.station, f.device, new Set(), f.setTimer)).to.equal(false);
+        expect(f.timers).to.deep.equal([]);
     });
 });

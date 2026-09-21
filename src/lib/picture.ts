@@ -1,4 +1,4 @@
-import type { Picture } from 'eufy-security-client';
+import { CommandName, PropertyName, type Device, type Picture, type Station } from 'eufy-security-client';
 
 /**
  * Returns the file extension to store an event picture under, or `undefined` when the picture
@@ -32,4 +32,50 @@ export const describePictureData = function (data: unknown): string {
     return /^\w+$/.test(prefix)
         ? `${data.length} bytes, format "${prefix}"`
         : `${data.length} bytes, unrecognised format`;
+};
+
+/**
+ * Asks the station for the device's latest picture over P2P, the way eufy-security-client loads
+ * the picture on start (#136). The picture that comes with an event notification is downloaded
+ * from the cloud, and in newer formats (`v8_eufysecurity`) it cannot be decrypted; the station
+ * hands out the same picture in a decodable form. The client falls back to this only when the
+ * cloud download is empty, not when it cannot be decoded.
+ *
+ * The query runs after the delay eufy-security-client uses (`getWaitSeconds`): 60 seconds, or the
+ * custom clip length in working mode 2, because the station stores the picture only once the
+ * recording has ended. One query per device is pending at a time.
+ *
+ * @param station station of the device
+ * @param device device whose picture could not be decoded
+ * @param pending serials of devices with a pending query, shared between calls
+ * @param setTimer schedules the query; the adapter's own timer, which unload clears
+ * @returns `false` when the station does not support the query
+ */
+export const schedulePictureOverP2P = function (
+    station: Pick<Station, 'hasCommand' | 'databaseQueryLatestInfo'>,
+    device: Pick<Device, 'getSerial' | 'getPropertyValue'>,
+    pending: Set<string>,
+    setTimer: (callback: () => void, ms: number) => unknown,
+): boolean {
+    if (!station.hasCommand(CommandName.StationDatabaseQueryLatestInfo)) {
+        return false;
+    }
+    const serial = device.getSerial();
+    if (pending.has(serial)) {
+        return true;
+    }
+    const clipLength: unknown = device.getPropertyValue(PropertyName.DeviceRecordingClipLength);
+    const seconds =
+        device.getPropertyValue(PropertyName.DevicePowerWorkingMode) === 2 &&
+        typeof clipLength === 'number' &&
+        Number.isFinite(clipLength) &&
+        clipLength > 0
+            ? Math.min(clipLength, 300)
+            : 60;
+    pending.add(serial);
+    setTimer(() => {
+        pending.delete(serial);
+        station.databaseQueryLatestInfo();
+    }, seconds * 1000);
+    return true;
 };

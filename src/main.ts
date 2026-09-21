@@ -54,7 +54,7 @@ import {
 } from './lib/utils';
 import { handleMessage } from './lib/messages';
 import type { PersistentData } from './lib/interfaces';
-import { describePictureData, getPictureExtension } from './lib/picture';
+import { describePictureData, getPictureExtension, schedulePictureOverP2P } from './lib/picture';
 import { ioBrokerLogger } from './lib/log';
 import {
     applyEufyApiCompatibility,
@@ -96,6 +96,8 @@ export class euSec extends Adapter {
     private terminating = false;
     /** Running talkbacks by device serial; aborting one stops its encoder. */
     private readonly talkbacks = new Map<string, AbortController>();
+    /** Devices whose event picture is being fetched from the station over P2P (#136). */
+    private readonly p2pPictureRequests = new Set<string>();
 
     public constructor(options: Partial<AdapterOptions> = {}) {
         super({
@@ -1289,10 +1291,23 @@ export class euSec extends Adapter {
                 const picture = value as Picture;
                 const ext = getPictureExtension(picture);
                 if (ext === undefined) {
-                    // Keep the last good picture instead of storing a "<serial>.unknown" file (#136).
-                    this.logger.warn(
-                        `Event picture of device ${device.getSerial()} could not be decoded, keeping the previous picture (${describePictureData(picture?.data)})`,
-                    );
+                    // Keep the last good picture instead of storing a "<serial>.unknown" file and
+                    // fetch the picture from the station instead, which sends it decodable (#136).
+                    const station = await this.eufy.getStation(device.getStationSerial());
+                    const description = describePictureData(picture?.data);
+                    if (
+                        schedulePictureOverP2P(station, device, this.p2pPictureRequests, (callback, ms) =>
+                            this.setTimeout(callback, ms),
+                        )
+                    ) {
+                        this.logger.info(
+                            `Event picture of device ${device.getSerial()} could not be decoded (${description}), loading it from the station`,
+                        );
+                    } else {
+                        this.logger.warn(
+                            `Event picture of device ${device.getSerial()} could not be decoded, keeping the previous picture (${description})`,
+                        );
+                    }
                     return;
                 }
                 const fileName = `${device.getSerial()}.${ext}`;
