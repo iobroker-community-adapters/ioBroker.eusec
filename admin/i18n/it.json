@@ -24,6 +24,8 @@
     "RTSP port": "Porta RTSP",
     "RTSP Username": "Nome utente RTSP",
     "RTSP Password": "Password RTSP",
+    "Devices with a compatibility stream": "Dispositivi con flusso di compatibilità",
+    "Serial numbers of cameras whose livestream is re-encoded to 1280x720 H.264 before it reaches the player. For old WebViews, kiosk tablets and picky hardware decoders that cannot handle the resolution the camera sends. Costs CPU on the ioBroker host while such a stream is watched.": "Numeri di serie delle telecamere il cui flusso live viene ricodificato in H.264 1280x720 prima di raggiungere il player. Per vecchie WebView, tablet in modalità chiosco e decoder hardware esigenti che non gestiscono la risoluzione inviata dalla telecamera. Consuma CPU sull'host ioBroker finché un flusso di questo tipo viene guardato.",
     "Country": "Paese",
     "inherited from ioBroker": "ereditato da ioBroker",
     "Afghanistan": "Afghanistan",

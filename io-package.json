@@ -175,6 +175,7 @@
     "p2pConnectionType": "quickest",
     "acceptInvitations": true,
     "keepConnectedStations": [],
+    "compatStreamDevices": [],
     "alarmSoundDuration": 60,
     "go2rtc_api_port": 1984,
     "go2rtc_rtsp_port": 8554,

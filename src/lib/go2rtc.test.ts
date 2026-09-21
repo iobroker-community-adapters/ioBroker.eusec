@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 
-import { buildPlayerUrl, streamToGo2rtcFailed } from './go2rtc';
+import { buildPlayerUrl, compatStreamSource, go2rtcStreamName, streamToGo2rtcFailed } from './go2rtc';
 
 const fulfilled = (): PromiseSettledResult<void> => ({ status: 'fulfilled', value: undefined });
 const rejected = (reason: unknown): PromiseSettledResult<void> => ({ status: 'rejected', reason });
@@ -36,5 +36,20 @@ describe('go2rtc => buildPlayerUrl', () => {
 
     it('should encode a serial that is not URL safe', () => {
         expect(buildPlayerUrl('iobroker', 1984, 'a b&c')).to.contain('?src=a%20b%26c');
+    });
+});
+
+describe('go2rtc => go2rtcStreamName', () => {
+    it('should play the untouched stream of a device that is not configured for compatibility', () => {
+        expect(go2rtcStreamName('T8410P00', [])).to.equal('T8410P00');
+        expect(go2rtcStreamName('T8410P00', ['T84A1P00'])).to.equal('T8410P00');
+    });
+
+    it('should play the transcoded stream of a configured device', () => {
+        expect(go2rtcStreamName('T84A1P00', ['T8410P00', 'T84A1P00'])).to.equal('T84A1P00_compat');
+    });
+
+    it('should build the compatibility stream from the stream the device pushes into', () => {
+        expect(compatStreamSource('T84A1P00')).to.equal('ffmpeg:T84A1P00#video=h264#width=1280#height=720#audio=copy');
     });
 });

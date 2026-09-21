@@ -24,6 +24,8 @@
     "RTSP port": "RTSP poort",
     "RTSP Username": "RTSP gebruikersnaam",
     "RTSP Password": "RTSP wachtwoord",
+    "Devices with a compatibility stream": "Apparaten met een compatibiliteitsstream",
+    "Serial numbers of cameras whose livestream is re-encoded to 1280x720 H.264 before it reaches the player. For old WebViews, kiosk tablets and picky hardware decoders that cannot handle the resolution the camera sends. Costs CPU on the ioBroker host while such a stream is watched.": "Serienummers van camera's waarvan de livestream vóór het afspelen wordt omgezet naar 1280x720 H.264. Voor oude WebViews, kiosktablets en kieskeurige hardwaredecoders die de resolutie van de camera niet aankunnen. Kost CPU op de ioBroker-host zolang zo'n stream wordt bekeken.",
     "Country": "Land",
     "inherited from ioBroker": "geërfd van ioBroker",
     "Afghanistan": "Afghanistan",

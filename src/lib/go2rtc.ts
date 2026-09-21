@@ -39,6 +39,38 @@ export const streamToGo2rtcFailed = (results: Array<PromiseSettledResult<void>>)
     results.some(result => result.status === 'rejected' && !isRegularStreamEnd(result.reason));
 
 /**
+ * Suffix of the transcoded stream go2rtc registers next to the untouched one for a device that is
+ * listed in the compatibility setting.
+ */
+export const COMPAT_STREAM_SUFFIX = '_compat';
+
+/**
+ * Name of the go2rtc stream a player is pointed at. The cameras send up to 2048x1536 High Profile,
+ * which old WebViews and kiosk tablets decode as green macroblocks or not at all, so a device
+ * listed in the compatibility setting is played from the transcoded stream instead.
+ *
+ * The device always keeps pushing into the stream named after its serial - only the consumer side
+ * changes.
+ *
+ * @param serial Serial of the device
+ * @param compatSerials Serials configured for the compatibility stream
+ * @returns The stream name to play from
+ */
+export const go2rtcStreamName = (serial: string, compatSerials: string[]): string =>
+    compatSerials.includes(serial) ? `${serial}${COMPAT_STREAM_SUFFIX}` : serial;
+
+/**
+ * go2rtc source of the compatibility stream: the untouched stream of the device, re-encoded to
+ * 1280x720 H.264. Audio is copied, so it stays what the camera sent. go2rtc starts one ffmpeg per
+ * viewer of this stream, which is why it is opt-in per device.
+ *
+ * @param serial Serial of the device
+ * @returns The source string for the go2rtc configuration
+ */
+export const compatStreamSource = (serial: string): string =>
+    `ffmpeg:${serial}#video=h264#width=1280#height=720#audio=copy`;
+
+/**
  * Builds the URL of the livestream player page. The page is served by go2rtc itself, because
  * go2rtc answers a WebSocket from a different origin with "403 Forbidden".
  *
@@ -47,8 +79,8 @@ export const streamToGo2rtcFailed = (results: Array<PromiseSettledResult<void>>)
  *
  * @param hostname Host go2rtc is reachable at
  * @param apiPort Port of the go2rtc API
- * @param serial Serial of the device to stream
- * @returns The URL of the player page for that device
+ * @param stream Name of the go2rtc stream to play, see go2rtcStreamName()
+ * @returns The URL of the player page for that stream
  */
-export const buildPlayerUrl = (hostname: string, apiPort: number, serial: string): string =>
-    `http://${hostname}:${apiPort}/${PLAYER_PAGE}?src=${encodeURIComponent(serial)}&${PLAYER_QUERY}`;
+export const buildPlayerUrl = (hostname: string, apiPort: number, stream: string): string =>
+    `http://${hostname}:${apiPort}/${PLAYER_PAGE}?src=${encodeURIComponent(stream)}&${PLAYER_QUERY}`;

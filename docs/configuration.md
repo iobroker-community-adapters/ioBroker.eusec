@@ -47,3 +47,4 @@ See below for more configuration parameters.
   | RTSP port | go2rtc RTSP port setting |
   | RTSP username | go2rtc RTSP username setting |
   | RTSP password | go2rtc RTSP password setting |
+  | Devices with a compatibility stream | Serial numbers of cameras whose livestream is re-encoded to 1280x720 H.264 before it reaches the player, for old WebViews, kiosk tablets and hardware decoders that cannot handle the resolution the camera sends. The states `livestream` and `livestream_rtsp` of such a camera point at the transcoded stream `<serial>_compat`, the untouched stream stays available under `<serial>`. Transcoding costs CPU on the ioBroker host while the stream is watched. |

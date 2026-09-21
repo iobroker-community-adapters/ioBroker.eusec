@@ -59,7 +59,7 @@ import {
     keepStationsConnected,
     parseSerialList,
 } from './lib/eufyApiCompat';
-import { buildPlayerUrl, streamToGo2rtcFailed } from './lib/go2rtc';
+import { buildPlayerUrl, compatStreamSource, go2rtcStreamName, streamToGo2rtcFailed } from './lib/go2rtc';
 import { streamToGo2rtc } from './lib/video';
 import { parseTalkbackSource, pipeToTalkback, talkbackFfmpegArgs, waitForDeviceEvent } from './lib/talkback';
 
@@ -435,8 +435,17 @@ export class euSec extends Adapter {
                         go2rtcConfig.rtsp.username = this.config.go2rtc_rtsp_username;
                         go2rtcConfig.rtsp.password = this.config.go2rtc_rtsp_password;
                     }
+                    const compatSerials = parseSerialList(this.config.compatStreamDevices);
                     for (const device of await this.eufy.getDevices()) {
-                        go2rtcConfig.streams[device.getSerial()] = null;
+                        const serial = device.getSerial();
+                        go2rtcConfig.streams[serial] = null;
+                        const streamName = go2rtcStreamName(serial, compatSerials);
+                        if (streamName !== serial) {
+                            // go2rtc is started with "-config <JSON>" and then refuses every config
+                            // change at runtime ("config file disabled"), so a compatibility stream
+                            // can only be part of the configuration built here.
+                            go2rtcConfig.streams[streamName] = compatStreamSource(serial);
+                        }
                     }
                     this.startGo2rtc(JSON.stringify(go2rtcConfig));
                 }
@@ -2225,12 +2234,13 @@ export class euSec extends Adapter {
         audiostream: Readable,
     ): Promise<void> {
         try {
+            const streamName = go2rtcStreamName(device.getSerial(), parseSerialList(this.config.compatStreamDevices));
             await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM), {
-                val: buildPlayerUrl(this.config.hostname, this.config.go2rtc_api_port, device.getSerial()),
+                val: buildPlayerUrl(this.config.hostname, this.config.go2rtc_api_port, streamName),
                 ack: true,
             });
             await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP), {
-                val: `rtsp://${this.config.hostname}:${this.config.go2rtc_rtsp_port}/${device.getSerial()}`,
+                val: `rtsp://${this.config.hostname}:${this.config.go2rtc_rtsp_port}/${streamName}`,
                 ack: true,
             });
             //await ffmpegStreamToGo2rtc(this.config, this.namespace, device.getSerial(), metadata, videostream, audiostream, this.logger);
