@@ -6,9 +6,6 @@ export const DataLocation = {
     LAST_EVENT: 'last_event',
 };
 
-export const STREAM_FILE_NAME_EXT = '.m3u8';
-export const IMAGE_FILE_JPEG_EXT = '.jpg';
-
 export const RoleMapping: IRoleMapping = {
     [PropertyName.Name]: 'info.name',
     [PropertyName.StationMacAddress]: 'info.mac',
@@ -35,9 +32,6 @@ export const RoleMapping: IRoleMapping = {
 };
 
 export const DeviceStateID = {
-    /*LAST_EVENT_PIC_URL: "last_event_pic_url",
-    LAST_EVENT_PIC_HTML: "last_event_pic_html",
-    LAST_EVENT_VIDEO_URL: "last_event_video_url",*/
     LIVESTREAM: 'livestream',
     START_STREAM: 'start_stream',
     STOP_STREAM: 'stop_stream',
@@ -50,7 +44,7 @@ export const DeviceStateID = {
     PAN_LEFT: 'pan_left',
     PAN_RIGHT: 'pan_right',
     TILT_UP: 'tilt_up',
-    TILT_DOWN: 'titl_down',
+    TILT_DOWN: 'tilt_down',
     ROTATE_360: 'rotate_360',
     PRESET_POSITION: 'preset_position',
     SAVE_PRESET_POSITION: 'save_preset_position',

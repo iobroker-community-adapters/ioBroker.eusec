@@ -1,30 +1,78 @@
-import type { Device } from 'eufy-security-client';
-import { CommandType } from 'eufy-security-client';
 import path from 'node:path';
-import fse from 'fs-extra';
-import * as utils from '@iobroker/adapter-core';
+import util from 'node:util';
 
 import type { ioBrokerLogger } from './log';
-import type { euSec } from '../main';
 
-export const setStateChangedAsync = async function (
-    adapter: ioBroker.Adapter,
-    id: string,
-    value: any,
-): ioBroker.SetStateChangedPromise {
-    return await adapter
+/**
+ * Writes a status value if it changed. A failed write is ignored, as it always was meant to be:
+ * the value is written again with the next change.
+ *
+ * @param adapter The adapter instance
+ * @param id The state id
+ * @param value The value, null or undefined clear the state
+ */
+export const setStateChangedAsync = async function (adapter: ioBroker.Adapter, id: string, value: any): Promise<void> {
+    await adapter
         .setStateChangedAsync(id, value === undefined || value === null ? null : { val: value, ack: true })
-        .catch();
+        .catch(() => {});
 };
 
-export const isEmpty = function (str: string | null | undefined): boolean {
-    if (str) {
-        if (str.length > 0) {
-            return false;
-        }
-        return true;
+/**
+ * Converts a property value to what its state stores: objects become JSON for string and object
+ * states, everything else is passed through.
+ *
+ * @param type common.type of the state
+ * @param value The property value
+ * @returns The state value
+ */
+export const toStateValue = (type: string | undefined, value: unknown): unknown =>
+    (type === 'string' || type === 'object') && typeof value === 'object' ? JSON.stringify(value) : value;
+
+/**
+ * Writes a changed property of a device or station to its state. The state is addressed by id, so
+ * a state that exists without a value yet - one whose property had no value when it was created -
+ * receives the update too.
+ *
+ * @param adapter The adapter instance
+ * @param id The id of the property state
+ * @param name The property name, it has to match native.name of the state
+ * @param value The new property value
+ * @returns true if the state was written, false if the adapter has no state for that property
+ */
+export const setPropertyState = async function (
+    adapter: ioBroker.Adapter,
+    id: string,
+    name: string,
+    value: unknown,
+): Promise<boolean> {
+    const obj = await adapter.getObjectAsync(id);
+    if (obj?.native?.name !== name) {
+        return false;
     }
+    await setStateChangedAsync(adapter, id, toStateValue(obj.common.type, value));
     return true;
+};
+
+/** Parts of common that js-controller keeps on setObject() and that other adapters or the user own. */
+const PRESERVED_COMMON = ['custom', 'smartName', 'material', 'habpanel', 'mobile'];
+
+/**
+ * Tells whether the stored common of an object differs from the one the adapter would write. The
+ * stored one comes from the database, which drops every key whose value is undefined, so the
+ * wanted one is compared as it would be stored.
+ *
+ * @param stored common as read from the objects database
+ * @param wanted common as built by the adapter
+ * @returns true if the object has to be written
+ */
+export const commonChanged = (stored: object, wanted: object): boolean => {
+    const comparable = (common: object): Record<string, unknown> =>
+        Object.fromEntries(
+            Object.entries(JSON.parse(JSON.stringify(common)) as Record<string, unknown>).filter(
+                ([key]) => !PRESERVED_COMMON.includes(key),
+            ),
+        );
+    return !util.isDeepStrictEqual(comparable(stored), comparable(wanted));
 };
 
 export const getImageAsHTML = function (data: Buffer, mime = 'image/jpg'): string {
@@ -34,163 +82,54 @@ export const getImageAsHTML = function (data: Buffer, mime = 'image/jpg'): strin
     return '';
 };
 
-/*export const getDataFilePath = function(adapter: ioBroker.Adapter, stationSerial: string, folderName: string, fileName: string): string {
-    const dir_path = path.join(utils.getAbsoluteInstanceDataDir(adapter), stationSerial, folderName);
-    if (!fse.existsSync(dir_path)) {
-        fse.mkdirSync(dir_path, {mode: 0o775, recursive: true});
-    }
-    return path.join(dir_path, fileName);
-}*/
-
-export const setStateAsync = async function (
-    adapter: ioBroker.Adapter,
-    state_id: string,
-    common_name: string,
-    value: string,
-    role = 'text',
-    type: 'string' | 'number' | 'boolean' | 'object' | 'array' | 'mixed' | undefined = 'string',
-): Promise<void> {
-    await adapter.setObjectNotExistsAsync(state_id, {
-        type: 'state',
-        common: {
-            name: common_name,
-            type: type,
-            role: role,
-            read: true,
-            write: false,
-        },
-        native: {},
-    });
-    await adapter.setStateAsync(state_id, { val: value, ack: true });
-};
-
-export const removeFiles = function (
+export const removeFiles = async function (
     adapter: ioBroker.Adapter,
     stationSerial: string,
     folderName: string,
     device_sn: string,
 ): Promise<void> {
-    // eslint-disable-next-line no-async-promise-executor
-    return new Promise(async (resolve, reject) => {
-        try {
-            const dir_path = path.join(stationSerial, folderName);
-            if (await adapter.fileExistsAsync(adapter.namespace, dir_path)) {
-                const files = (await adapter.readDirAsync(adapter.namespace, dir_path)).filter(fn =>
-                    fn.file.startsWith(device_sn),
-                );
-                try {
-                    for (const filename of files) {
-                        await adapter.delFileAsync(adapter.namespace, path.join(dir_path, filename.file));
-                    }
-                } catch {
-                    // ignore
-                }
-            }
-            resolve();
-        } catch (error) {
-            reject(new Error(`Failed to remove files: ${error as Error}`));
-        }
-    });
-};
-
-/*export const moveFiles = function(adapter: ioBroker.Adapter, stationSerial: string, device_sn: string, srcFolderName: string, dstFolderName: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-        try {
-            const dirSrcPath = path.join(utils.getAbsoluteInstanceDataDir(adapter), stationSerial, srcFolderName);
-            const dirDstPath = path.join(utils.getAbsoluteInstanceDataDir(adapter), stationSerial, dstFolderName);
-            if (!fse.existsSync(dirDstPath)) {
-                fse.mkdirSync(dirDstPath, {mode: 0o775, recursive: true});
-            }
-            if (fse.existsSync(dirSrcPath)) {
-                const files = fse.readdirSync(dirSrcPath).filter(fn => fn.startsWith(device_sn));
-                try {
-                    files.map(filename => fse.moveSync(path.join(dirSrcPath, filename), path.join(dirDstPath, filename)));
-                } catch (error) {
-                }
-            }
-            resolve();
-        } catch (error) {
-            reject(error);
-        }
-    });
-}*/
-
-export const lowestUnusedNumber = function (sequence: number[], startingFrom: number): number {
-    const arr = sequence.slice(0);
-    arr.sort((a, b) => a - b);
-    return arr.reduce((lowest, num, i) => {
-        const seqIndex = i + startingFrom;
-        return num !== seqIndex && seqIndex < lowest ? seqIndex : lowest;
-    }, arr.length + startingFrom);
-};
-
-export const getVideoClipLength = (device: Device): number => {
-    let length = 60;
-    const workingMode = device.getRawProperty(CommandType.CMD_SET_PIR_POWERMODE);
-    if (workingMode !== undefined) {
-        switch (workingMode) {
-            case '0':
-                if (device.isCamera2Product() || device.isIndoorCamera() || device.isSoloCameras()) {
-                    length = 20;
-                } else if (device.isBatteryDoorbell() || device.isBatteryDoorbell2()) {
-                    length = 30;
-                }
-                break;
-            case '1':
-                // Corresponds to 60 seconds
-                break;
-            case '2': {
-                const customValue = device.getRawProperty(CommandType.CMD_DEV_RECORD_TIMEOUT);
-                if (customValue !== undefined) {
-                    try {
-                        length = Number.parseInt(customValue);
-                    } catch {
-                        // ignore
-                    }
-                }
-                break;
-            }
-            case '3':
-                // Corresponds to 60 seconds?? (this mode exists only for battery doorbells; mode: Optimal Battery Life)
-                break;
-        }
-    }
-    return length;
-};
-
-export const removeLastChar = function (text: string, char: string): string {
-    const strArr = [...text];
-    strArr.splice(text.lastIndexOf(char), 1);
-    return strArr.join('');
-};
-
-export const changeRole = async function (
-    adapter: ioBroker.Adapter,
-    log: ioBrokerLogger,
-    state: string,
-    role: string,
-): Promise<void> {
     try {
-        const states = await adapter.getStatesAsync(`*.${state}`);
-        if (states) {
-            Object.keys(states).forEach(async id => {
-                await adapter
-                    .extendObjectAsync(
-                        id,
-                        {
-                            type: 'state',
-                            common: {
-                                role: role,
-                            },
-                        },
-                        {},
-                    )
-                    .catch();
-            });
+        const dir_path = path.join(stationSerial, folderName);
+        if (await adapter.fileExistsAsync(adapter.namespace, dir_path)) {
+            const files = (await adapter.readDirAsync(adapter.namespace, dir_path)).filter(fn =>
+                fn.file.startsWith(device_sn),
+            );
+            try {
+                for (const filename of files) {
+                    await adapter.delFileAsync(adapter.namespace, path.join(dir_path, filename.file));
+                }
+            } catch {
+                // ignore
+            }
         }
     } catch (error) {
-        log.error(`state: ${state} role: ${role} - Error:`, error);
+        throw new Error(`Failed to remove files: ${error as Error}`);
     }
+};
+
+/**
+ * Compares two adapter versions part by part. A pre-release suffix ("-alpha.0") is ignored and a
+ * missing part counts as 0.
+ *
+ * @param a A version like "3.10.0"
+ * @param b A version like "3.9.0"
+ * @returns A negative number if a is older, 0 if both are equal, a positive number if a is newer
+ */
+export const compareVersions = (a: string, b: string): number => {
+    const parts = (version: string): number[] =>
+        version
+            .split('-')[0]
+            .split('.')
+            .map(part => Number.parseInt(part, 10) || 0);
+    const pa = parts(a);
+    const pb = parts(b);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+        if (diff !== 0) {
+            return diff;
+        }
+    }
+    return 0;
 };
 
 export const deleteStates = async function (adapter: ioBroker.Adapter, property: string): Promise<void> {
@@ -198,45 +137,54 @@ export const deleteStates = async function (adapter: ioBroker.Adapter, property:
     if (states) {
         const ids = Object.keys(states);
         for (const id of ids) {
-            await adapter.delObjectAsync(id).catch();
+            await adapter.delObjectAsync(id).catch(() => {});
         }
     }
 };
 
+/**
+ * Runs the migrations between two adapter versions.
+ *
+ * @param adapter The adapter instance
+ * @param log The logger
+ * @param oldVersion The version that ran before, "" on a fresh installation
+ */
 export const handleUpdate = async function (
-    adapter: euSec,
+    adapter: ioBroker.Adapter,
     log: ioBrokerLogger,
-    oldVersion: number,
-    newVersion: number,
+    oldVersion: string,
 ): Promise<void> {
-    if (oldVersion != 0 && oldVersion <= 0.61) {
+    if (oldVersion === '') {
+        return;
+    }
+    if (compareVersions(oldVersion, '0.6.1') <= 0) {
         try {
             const all = await adapter.getStatesAsync('T*');
             if (all) {
                 const ids = Object.keys(all);
                 for (const id of ids) {
-                    await adapter.delObjectAsync(id, { recursive: false }).catch();
+                    await adapter.delObjectAsync(id, { recursive: false }).catch(() => {});
                 }
             }
             const channels = await adapter.getChannelsOfAsync();
             if (channels) {
                 for (const channel of channels) {
                     if (channel.common.name !== 'info') {
-                        await adapter.delObjectAsync(channel._id, { recursive: false }).catch();
+                        await adapter.delObjectAsync(channel._id, { recursive: false }).catch(() => {});
                     }
                 }
             }
             const devices = await adapter.getDevicesAsync();
             if (devices) {
                 for (const device of devices) {
-                    await adapter.delObjectAsync(device._id, { recursive: false }).catch();
+                    await adapter.delObjectAsync(device._id, { recursive: false }).catch(() => {});
                 }
             }
         } catch (error) {
             log.error('Version 0.6.1: Error:', error);
         }
     }
-    if (oldVersion != 0 && oldVersion <= 0.74) {
+    if (compareVersions(oldVersion, '0.7.4') <= 0) {
         try {
             await adapter.setObjectAsync('verify_code', {
                 type: 'state',
@@ -253,7 +201,7 @@ export const handleUpdate = async function (
             log.error('Version 0.7.4: Error:', error);
         }
     }
-    if (oldVersion != 0 && oldVersion <= 1) {
+    if (compareVersions(oldVersion, '1.0.0') <= 0) {
         for (const state of ['last_event_pic_url', 'last_event_pic_html', 'last_event_video_url']) {
             try {
                 await deleteStates(adapter, state);
@@ -262,35 +210,56 @@ export const handleUpdate = async function (
             }
         }
     }
-    if (oldVersion == 0 && newVersion == 1.3) {
-        const data_dir = utils.getAbsoluteInstanceDataDir(adapter);
+    if (compareVersions(oldVersion, '3.2.1') <= 0) {
+        // set_privacy_angle was created with the name of set_default_angle. A name the user changed
+        // is left alone.
         try {
-            const file = path.join(data_dir, 'adapter.json');
-            if (fse.statSync(file).isFile()) {
-                const fileContent = fse.readFileSync(file, 'utf8');
-                await adapter.writeFileAsync(adapter.namespace, 'adapter.json', fileContent);
+            const objects = await adapter.getAdapterObjectsAsync();
+            for (const [id, obj] of Object.entries(objects)) {
+                if (id.endsWith('.set_privacy_angle') && obj.common?.name === 'Set Default Angle') {
+                    await adapter.extendObjectAsync(id, { common: { name: 'Set Privacy Angle' } });
+                }
             }
-        } catch {
-            // log.error(`Version 3.0.0: Error:`, error);
+        } catch (error) {
+            log.error('Version 3.2.1 - set_privacy_angle: Error:', error);
         }
+        // The tilt down button was created as "titl_down". The object moves to "tilt_down" with its
+        // name and custom settings; scripts that use the old id have to be adapted.
         try {
-            const file = path.join(data_dir, 'persistent.json');
-            if (fse.statSync(file).isFile()) {
-                const fileContent = fse.readFileSync(file, 'utf8');
-                await adapter.writeFileAsync(adapter.namespace, 'driver.json', fileContent);
+            const objects = await adapter.getAdapterObjectsAsync();
+            for (const [id, obj] of Object.entries(objects)) {
+                if (!id.endsWith('.titl_down')) {
+                    continue;
+                }
+                const newId = `${id.slice(0, -'titl_down'.length)}tilt_down`;
+                if (objects[newId] === undefined) {
+                    await adapter.setObjectAsync(newId, { ...obj, _id: newId });
+                }
+                await adapter.delObjectAsync(id);
             }
-        } catch {
-            // log.error(`Version 3.0.0: Error:`, error);
+        } catch (error) {
+            log.error('Version 3.2.1 - titl_down: Error:', error);
         }
-        try {
-            fse.removeSync(data_dir);
-        } catch {
-            // log.error(`Version 3.0.0: Error:`, error);
+    }
+};
+
+/**
+ * Deletes the channels named "unknown" that hold no objects any more. The channels are found among
+ * all objects of the instance, so a state without a value still counts as content.
+ *
+ * @param adapter The adapter instance
+ */
+export const deleteEmptyUnknownChannels = async function (adapter: ioBroker.Adapter): Promise<void> {
+    const objects = await adapter.getAdapterObjectsAsync();
+    const ids = Object.keys(objects);
+    for (const [id, obj] of Object.entries(objects)) {
+        if (
+            obj.type === 'channel' &&
+            obj.common?.name === 'unknown' &&
+            !ids.some(other => other.startsWith(`${id}.`))
+        ) {
+            await adapter.delObjectAsync(id);
         }
-        adapter.log.warn(
-            'Migrated configuration files to new location (needs restart). Restart of the adapter initiated.',
-        );
-        adapter.restartAdapter();
     }
 };
 

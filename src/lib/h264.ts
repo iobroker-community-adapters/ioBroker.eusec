@@ -33,7 +33,7 @@ const PROFILES = new Set([66, 77, 88, ...HIGH_PROFILES]);
  * order. MaxFS is the frame size in macroblocks, MaxMBPS the macroblock rate per second and
  * MaxDpbMbs the size of the decoded picture buffer in macroblocks.
  *
- * ponytail: the bitrate limit (MaxBR) of a level is not checked, because the raw stream carries no
+ * Known limit: the bitrate limit (MaxBR) of a level is not checked, because the raw stream carries no
  * bitrate and measuring it would mean buffering. Every level from 3.1 up allows at least
  * 14 Mbit/s, far above what these cameras produce. Add the check if a camera ever streams more.
  */
