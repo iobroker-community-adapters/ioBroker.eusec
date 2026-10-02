@@ -1280,6 +1280,25 @@
                     "xl": 6
                 }
             }
+        },
+        "streamsTab": {
+            "type": "panel",
+            "label": "Streams",
+            "items": {
+                "_overview": {
+                    "type": "textSendTo",
+                    "container": "html",
+                    "command": "streamOverview",
+                    "data": {
+                        "overview": true
+                    },
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 12,
+                    "lg": 12,
+                    "xl": 12
+                }
+            }
         }
     }
 }

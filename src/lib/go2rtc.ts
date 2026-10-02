@@ -89,3 +89,53 @@ export const compatStreamSource = (serial: string): string =>
  */
 export const buildPlayerUrl = (hostname: string, apiPort: number, stream: string): string =>
     `http://${hostname}:${apiPort}/${PLAYER_PAGE}?src=${encodeURIComponent(stream)}&${PLAYER_QUERY}`;
+
+/**
+ * Builds the RTSP URL go2rtc serves a stream at.
+ *
+ * @param hostname Host go2rtc is reachable at
+ * @param rtspPort Port of the go2rtc RTSP server
+ * @param stream Name of the go2rtc stream to play, see go2rtcStreamName()
+ * @returns The RTSP URL of that stream
+ */
+export const buildRtspUrl = (hostname: string, rtspPort: number, stream: string): string =>
+    `rtsp://${hostname}:${rtspPort}/${encodeURIComponent(stream)}`;
+
+/** One address of a network interface, as os.networkInterfaces() lists it. */
+export interface InterfaceAddress {
+    address: string;
+    family: string | number;
+    internal: boolean;
+}
+
+/** Interfaces of containers, bridges and tunnels - their addresses are not reachable from the LAN. */
+const VIRTUAL_INTERFACE = /^(docker|br-|veth|virbr|lxc|lxd|cni|flannel|cali|tun|tap|wg|zt|tailscale)/i;
+
+const isPrivateIPv4 = (address: string): boolean =>
+    /^10\./.test(address) || /^192\.168\./.test(address) || /^172\.(1[6-9]|2\d|3[01])\./.test(address);
+
+/**
+ * Picks the address other devices reach the ioBroker host at, for the URLs of the livestreams
+ * when no host name is configured. The name of the host ("iobroker") is what the URLs used before,
+ * and tablets, phones and dashboards often cannot resolve it.
+ *
+ * @param interfaces The network interfaces of the host (system.host.*.native.hardware.networkInterfaces)
+ * @returns An IPv4 address of the LAN, preferring private ones, or undefined if there is none
+ */
+export const pickHostAddress = (
+    interfaces: Record<string, InterfaceAddress[] | undefined> | undefined,
+): string | undefined => {
+    const candidates: string[] = [];
+    for (const [name, addresses] of Object.entries(interfaces ?? {})) {
+        if (VIRTUAL_INTERFACE.test(name)) {
+            continue;
+        }
+        for (const entry of addresses ?? []) {
+            const ipv4 = entry.family === 'IPv4' || entry.family === 4;
+            if (ipv4 && !entry.internal && !entry.address.startsWith('169.254.')) {
+                candidates.push(entry.address);
+            }
+        }
+    }
+    return candidates.find(isPrivateIPv4) ?? candidates[0];
+};

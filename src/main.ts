@@ -62,7 +62,15 @@ import {
     keepStationsConnected,
     parseSerialList,
 } from './lib/eufyApiCompat';
-import { buildPlayerUrl, compatStreamSource, go2rtcStreamName, streamToGo2rtcFailed } from './lib/go2rtc';
+import {
+    buildPlayerUrl,
+    buildRtspUrl,
+    compatStreamSource,
+    go2rtcStreamName,
+    pickHostAddress,
+    streamToGo2rtcFailed,
+} from './lib/go2rtc';
+import { renderStreamOverview, type StreamInfo } from './lib/overview';
 import {
     fixedStreamingQualities,
     isAutoStreamingQuality,
@@ -86,6 +94,8 @@ const LIVESTREAM_DATA_WAIT_DEFAULT = 15;
  * the library's timer stays as a safety net for starts that never deliver.
  */
 const LIVESTREAM_START_ALLOWANCE = 120;
+/** sendTo command of the "Streams" tab in the instance settings. */
+const STREAM_OVERVIEW_COMMAND = 'streamOverview';
 
 export class euSec extends Adapter {
     private eufy!: EufySecurity;
@@ -110,6 +120,8 @@ export class euSec extends Adapter {
     private readonly livestreamTimeouts = new Map<string, ioBroker.Timeout | undefined>();
     /** Devices and qualities the streaming quality hints were logged for in this run. */
     private readonly qualityHints = new Set<string>();
+    /** The address the URLs use because no host name is configured. */
+    private hostnameAuto: string | undefined = undefined;
 
     public constructor(options: Partial<AdapterOptions> = {}) {
         super({
@@ -271,7 +283,11 @@ export class euSec extends Adapter {
             if (this.config.hostname === '') {
                 // The host this instance runs on - with several hosts the first one is any of them.
                 const host = hosts[`system.host.${this.host}`] ?? Object.values(hosts)[0];
-                this.config.hostname = host.native.os.hostname;
+                // The name of the host is often not resolvable by the devices that play the
+                // livestream (tablets, phones, dashboards) - its address in the LAN is.
+                this.config.hostname =
+                    pickHostAddress(host.native.hardware?.networkInterfaces) ?? host.native.os.hostname;
+                this.hostnameAuto = this.config.hostname;
             }
         }
 
@@ -738,12 +754,61 @@ export class euSec extends Adapter {
      * @param obj
      */
     private async onMessage(obj: ioBroker.Message): Promise<void> {
+        if (typeof obj === 'object' && obj.command === STREAM_OVERVIEW_COMMAND) {
+            const result = renderStreamOverview(await this.collectStreams(), {
+                language: this.language ?? 'en',
+                hostnameAuto: this.hostnameAuto,
+                noGo2rtc: !pathToGo2rtc,
+            });
+            if (obj.callback) {
+                this.sendTo(obj.from, obj.command, result, obj.callback);
+            }
+            return;
+        }
         if (typeof obj === 'object' && obj.message) {
             const response = await handleMessage(this.eufy, obj.command, obj.message, this.log);
             if (obj.callback) {
                 this.sendTo(obj.from, obj.command, response, obj.callback);
             }
         }
+    }
+
+    /**
+     * Collects every device with a livestream and the URLs it is played at.
+     *
+     * @returns The devices, empty while the adapter is not connected to eufy
+     */
+    private async collectStreams(): Promise<StreamInfo[]> {
+        if (!this.eufy) {
+            return [];
+        }
+        const compatSerials = parseSerialList(this.config.compatStreamDevices);
+        const streams: StreamInfo[] = [];
+        try {
+            for (const device of await this.eufy.getDevices()) {
+                if (!device.hasCommand(CommandName.DeviceStartLivestream)) {
+                    continue;
+                }
+                const serial = device.getSerial();
+                const station = await this.eufy.getStation(device.getStationSerial()).catch(() => undefined);
+                const streamName = go2rtcStreamName(serial, compatSerials);
+                streams.push({
+                    serial,
+                    name: device.getName(),
+                    model: device.getModel(),
+                    station: station?.getName() ?? device.getStationSerial(),
+                    playerUrl: buildPlayerUrl(this.config.hostname, this.config.go2rtc_api_port, streamName),
+                    rtspUrl: buildRtspUrl(this.config.hostname, this.config.go2rtc_rtsp_port, streamName),
+                    originalPlayerUrl:
+                        streamName !== serial
+                            ? buildPlayerUrl(this.config.hostname, this.config.go2rtc_api_port, serial)
+                            : undefined,
+                });
+            }
+        } catch (error) {
+            this.logger.debug('Streams overview - Error', error);
+        }
+        return streams;
     }
 
     private getStateCommon(property: PropertyMetadataAny): ioBroker.StateCommon {
@@ -1617,7 +1682,7 @@ export class euSec extends Adapter {
                 ack: true,
             });
             await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP), {
-                val: `rtsp://${this.config.hostname}:${this.config.go2rtc_rtsp_port}/${streamName}`,
+                val: buildRtspUrl(this.config.hostname, this.config.go2rtc_rtsp_port, streamName),
                 ack: true,
             });
             //await ffmpegStreamToGo2rtc(this.config, this.namespace, device.getSerial(), metadata, videostream, audiostream, this.logger);
