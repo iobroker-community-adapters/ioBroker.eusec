@@ -2,7 +2,7 @@ import { expect } from 'chai';
 
 import { fixedStreamingQualities, isAutoStreamingQuality, resolveStreamingQuality } from './quality';
 
-// The states of the library (eufy-security-client 3.x) for the device families that differ.
+// The states of the library (eufy-security-client 4.1) for the device families that differ.
 const CAMERA = { 0: 'Auto', 1: 'Low', 2: 'Medium', 3: 'High' };
 const CAMERA_3 = { 5: 'Auto', 6: 'Low', 7: 'Medium', 8: 'High', 10: 'Ultra 4K' };
 const C35 = { 0: 'Auto', 1: 'High', 2: 'Medium' };

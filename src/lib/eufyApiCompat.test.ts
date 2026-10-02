@@ -396,7 +396,11 @@ describe('eufyApiCompat => applyEufyApiCompatibility', () => {
     });
 });
 
-describe('eufyApiCompat => eufyClientOptions', () => {
+describe('eufyApiCompat => eufyClientOptions', function () {
+    // Every test generates a 1024 bit RSA key in JavaScript, which takes several seconds on a busy
+    // machine - more than the 2 seconds mocha allows by default.
+    this.timeout(20000);
+
     // The P2P key helpers are not exported by the package, so they are loaded from its build.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const p2pUtils = require(path.join(path.dirname(require.resolve('eufy-security-client')), 'p2p', 'utils.js')) as {

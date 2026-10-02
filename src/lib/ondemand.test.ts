@@ -192,6 +192,10 @@ describe('ondemand => OnDemandStreams', () => {
         streams.attach('CAM1', cameraVideo, new stream.PassThrough());
         cameraVideo.write(keyframe('frame'));
         const response = await video.response;
+        // Let the start hook see the livestream arrive - it polls every 10 ms, and a hook that still
+        // runs takes the next request over instead of a new start. Timers fire in order, so this
+        // holds on a busy machine as well.
+        await wait(50);
         const ended = new Promise(resolve => response.on('end', resolve));
         streams.detach('CAM1');
         await ended;
