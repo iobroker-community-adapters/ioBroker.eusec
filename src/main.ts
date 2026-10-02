@@ -80,6 +80,12 @@ const GO2RTC_HEALTHY_RUNTIME = 60000;
 const VIDEO_STREAMING_QUALITY_AUTO_LABEL = 'Auto';
 /** Default of the setting "Wait for camera data (sec)" - the library gives up after 5 seconds. */
 const LIVESTREAM_DATA_WAIT_DEFAULT = 15;
+/**
+ * Time a camera gets to deliver its first picture on top of the maximum livestream duration. The
+ * library counts that duration from the start command, the adapter from the first picture, and
+ * the library's timer stays as a safety net for starts that never deliver.
+ */
+const LIVESTREAM_START_ALLOWANCE = 120;
 
 export class euSec extends Adapter {
     private eufy!: EufySecurity;
@@ -100,6 +106,8 @@ export class euSec extends Adapter {
     private readonly talkbacks = new Map<string, AbortController>();
     /** Devices whose event picture is being fetched from the station over P2P (#136). */
     private readonly p2pPictureRequests = new Set<string>();
+    /** Maximum livestream duration per device, counted from the first picture. */
+    private readonly livestreamTimeouts = new Map<string, ioBroker.Timeout | undefined>();
 
     public constructor(options: Partial<AdapterOptions> = {}) {
         super({
@@ -378,7 +386,13 @@ export class euSec extends Adapter {
             this.eufy.on('captcha request', (captchaId: string, captcha: string) =>
                 this.onCaptchaRequest(captchaId, captcha),
             );
-            this.eufy.setCameraMaxLivestreamDuration(this.config.maxLivestreamDuration);
+            // A camera that has to wake up first takes up to a minute to the first picture, which the
+            // library would subtract from the livestream. The adapter counts from the first picture.
+            this.eufy.setCameraMaxLivestreamDuration(
+                this.config.maxLivestreamDuration > 0
+                    ? this.config.maxLivestreamDuration + LIVESTREAM_START_ALLOWANCE
+                    : 0,
+            );
 
             await this.eufy.connect();
 
@@ -1495,6 +1509,37 @@ export class euSec extends Adapter {
         }
     }
 
+    /**
+     * Starts counting the maximum livestream duration of a device at its first picture.
+     *
+     * @param device_sn The serial number of the device
+     */
+    private startLivestreamTimeout(device_sn: string): void {
+        this.clearLivestreamTimeout(device_sn);
+        const seconds = this.config.maxLivestreamDuration;
+        if (!(seconds > 0)) {
+            return;
+        }
+        this.livestreamTimeouts.set(
+            device_sn,
+            this.setTimeout(() => {
+                this.livestreamTimeouts.delete(device_sn);
+                this.logger.info(
+                    `Stopping the livestream of device ${device_sn}, because it reached the maximum duration of ${seconds} seconds since the first picture`,
+                );
+                void this.stopLivestream(device_sn);
+            }, seconds * 1000),
+        );
+    }
+
+    private clearLivestreamTimeout(device_sn: string): void {
+        const timeout = this.livestreamTimeouts.get(device_sn);
+        if (timeout) {
+            this.clearTimeout(timeout);
+        }
+        this.livestreamTimeouts.delete(device_sn);
+    }
+
     private async onStationLivestreamStart(
         station: Station,
         device: Device,
@@ -1503,6 +1548,8 @@ export class euSec extends Adapter {
         audiostream: Readable,
     ): Promise<void> {
         try {
+            // The library emits the start with the first data of the camera.
+            this.startLivestreamTimeout(device.getSerial());
             const streamName = go2rtcStreamName(device.getSerial(), parseSerialList(this.config.compatStreamDevices));
             await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM), {
                 val: buildPlayerUrl(this.config.hostname, this.config.go2rtc_api_port, streamName),
@@ -1555,6 +1602,7 @@ export class euSec extends Adapter {
     private async onStationLivestreamStop(_station: Station, device: Device): Promise<void> {
         // Talkback only works during a livestream.
         this.talkbacks.get(device.getSerial())?.abort();
+        this.clearLivestreamTimeout(device.getSerial());
         try {
             await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM), { val: '', ack: true });
             await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP), { val: '', ack: true });
@@ -1604,6 +1652,7 @@ export class euSec extends Adapter {
                 if (!device.hasCommand(CommandName.DeviceStartLivestream)) {
                     continue;
                 }
+                this.clearLivestreamTimeout(device.getSerial());
                 await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM), { val: '', ack: true });
                 await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP), { val: '', ack: true });
             }
