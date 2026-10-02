@@ -54,12 +54,24 @@ export interface OnDemandOptions {
     unreachableFor: number;
 }
 
-const DEFAULT_OPTIONS: OnDemandOptions = {
+export const DEFAULT_START_ATTEMPT_OPTIONS: StartAttemptOptions = {
+    attempts: 3,
+    watch: 90,
+    noResponse: 75,
+    endWait: 5,
+};
+
+export const DEFAULT_OPTIONS: OnDemandOptions = {
     idleStopDelay: 10000,
     handoverDelay: 1000,
-    // A T8134 behind a HomeBase takes up to 25 seconds to the first frame, and a start that brings
-    // nothing is retried within this time.
-    firstDataTimeout: 180000,
+    // Outlasts every attempt of startUntilDelivered(), plus the time the start commands take. A 504
+    // in between makes go2rtc ask again, and for that moment nobody waits - the attempts would stop
+    // as if the livestream had arrived, and a camera that never answers is never paused.
+    firstDataTimeout:
+        DEFAULT_START_ATTEMPT_OPTIONS.attempts *
+            (DEFAULT_START_ATTEMPT_OPTIONS.endWait + DEFAULT_START_ATTEMPT_OPTIONS.watch) *
+            1000 +
+        15000,
     audioTimeout: 5000,
     // The slowest start that still delivered took 62 seconds.
     startBlock: 70000,
@@ -711,8 +723,6 @@ export interface StartAttemptOptions {
     /** How long a start waits for a livestream that just ended to no longer count as running, in seconds. */
     endWait: number;
 }
-
-const DEFAULT_START_ATTEMPT_OPTIONS: StartAttemptOptions = { attempts: 3, watch: 90, noResponse: 75, endWait: 5 };
 
 /**
  * Starts a livestream go2rtc asked for, and starts it again when it fails without any event. It

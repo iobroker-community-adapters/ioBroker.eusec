@@ -3,6 +3,8 @@ import http from 'node:http';
 import stream from 'node:stream';
 
 import {
+    DEFAULT_OPTIONS,
+    DEFAULT_START_ATTEMPT_OPTIONS,
     OnDemandStreams,
     busyReason,
     unreachableReason,
@@ -549,7 +551,13 @@ describe('ondemand => startUntilDelivered', () => {
      */
     const simulate = async (
         attempts: Camera[],
-        options: { waitingUntil?: number; streamingBefore?: number } = {},
+        options: {
+            waitingUntil?: number;
+            streamingBefore?: number;
+            /** The second go2rtc gets its 504 and asks again - for that check nobody waits. */
+            requestEndsAt?: number;
+            startOptions?: typeof DEFAULT_START_ATTEMPT_OPTIONS;
+        } = {},
     ): Promise<{ starts: number; stops: number; unreachable: boolean; seconds: number }> => {
         let seconds = 0;
         let startedAt = 0;
@@ -585,7 +593,9 @@ describe('ondemand => startUntilDelivered', () => {
                 isWaiting: () => {
                     const camera = current();
                     const delivered = camera?.deliversAt !== undefined && seconds - startedAt >= camera.deliversAt;
-                    return !delivered && seconds < (options.waitingUntil ?? Infinity);
+                    return (
+                        !delivered && seconds < (options.waitingUntil ?? Infinity) && seconds !== options.requestEndsAt
+                    );
                 },
                 markUnreachable: () => (unreachable = true),
                 cancelled: () => false,
@@ -595,7 +605,7 @@ describe('ondemand => startUntilDelivered', () => {
                 },
                 log: silent,
             },
-            { attempts: 3, watch: 90, noResponse: 75, endWait: 5 },
+            options.startOptions ?? { attempts: 3, watch: 90, noResponse: 75, endWait: 5 },
         );
         return { starts, stops, unreachable, seconds };
     };
@@ -622,6 +632,22 @@ describe('ondemand => startUntilDelivered', () => {
     it('should give up after the last attempt and pause the camera', async () => {
         const result = await simulate([{ streaming: [true] }, { streaming: [true] }, { streaming: [true] }]);
         expect(result).to.include({ starts: 3, stops: 3, unreachable: true });
+    });
+
+    it('should not end the attempts at the 504 go2rtc gets while a start still runs', async () => {
+        const { attempts, endWait, watch } = DEFAULT_START_ATTEMPT_OPTIONS;
+        const window = attempts * (endWait + watch);
+        // The longest the attempts can take - a request must not end before.
+        expect(DEFAULT_OPTIONS.firstDataTimeout / 1000).to.be.greaterThan(window);
+        const neverAnswers = [{ streaming: [true] }, { streaming: [true] }, { streaming: [true] }];
+        const result = await simulate(neverAnswers, {
+            requestEndsAt: DEFAULT_OPTIONS.firstDataTimeout / 1000,
+            startOptions: DEFAULT_START_ATTEMPT_OPTIONS,
+        });
+        expect(result).to.include({ starts: 3, stops: 3, unreachable: true });
+        // A 504 within the attempts - the old 180 seconds - ended them as if the livestream arrived.
+        const early = await simulate(neverAnswers, { requestEndsAt: 180, startOptions: DEFAULT_START_ATTEMPT_OPTIONS });
+        expect(early).to.include({ starts: 3, stops: 2, unreachable: false });
     });
 
     it('should stop retrying once nobody waits anymore', async () => {
