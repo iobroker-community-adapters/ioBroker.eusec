@@ -18,6 +18,8 @@ export interface StreamInfo {
 export interface OverviewContext {
     /** Language of the admin, everything but German falls back to English. */
     language: string;
+    /** Livestreams start when a player opens - otherwise only while one runs. */
+    onDemand?: boolean;
     /** No host name is configured - the URLs use this address of the ioBroker host instead. */
     hostnameAuto?: string;
     /** go2rtc is not available on this platform. */
@@ -34,7 +36,10 @@ const TEXTS = {
         rtsp: 'RTSP',
         open: 'open',
         original: 'untouched stream',
-        pushOnly: 'The URLs only play while a livestream runs (start_stream).',
+        onDemand:
+            'Opening a player URL or the RTSP URL starts the livestream. A station carries one livestream at a time.',
+        pushOnly:
+            'The URLs only play while a livestream runs (start_stream). With the setting "Start livestreams on demand" opening them starts it.',
         hostname: (host: string) =>
             `No host name is configured, so the URLs use "${host}" of the ioBroker host. If the devices that play the livestream reach the host at another address or name, enter it in the setting "Hostname".`,
     },
@@ -47,7 +52,10 @@ const TEXTS = {
         rtsp: 'RTSP',
         open: 'öffnen',
         original: 'unveränderter Stream',
-        pushOnly: 'Die URLs spielen nur, solange ein Livestream läuft (start_stream).',
+        onDemand:
+            'Das Öffnen einer Player- oder RTSP-URL startet den Livestream. Eine Station überträgt immer nur einen Livestream gleichzeitig.',
+        pushOnly:
+            'Die URLs spielen nur, solange ein Livestream läuft (start_stream). Mit der Einstellung "Livestreams bei Bedarf starten" startet das Öffnen ihn.',
         hostname: (host: string) =>
             `Es ist kein Hostname eingetragen, deshalb verwenden die URLs "${host}" des ioBroker-Hosts. Erreichen die Geräte, die den Livestream abspielen, den Host unter einer anderen Adresse oder einem Namen, trage sie in der Einstellung "Hostname" ein.`,
     },
@@ -105,7 +113,7 @@ export const renderStreamOverview = (streams: StreamInfo[], context: OverviewCon
             ].join('');
         });
 
-    const notes = [t.pushOnly];
+    const notes = [context.onDemand ? t.onDemand : t.pushOnly];
     if (context.hostnameAuto) {
         notes.push(t.hostname(context.hostnameAuto));
     }

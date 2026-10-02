@@ -45,6 +45,16 @@ describe('overview => renderStreamOverview', () => {
 
     it('should explain that the URLs only play while a livestream runs', () => {
         expect(renderStreamOverview([camera()], { language: 'en' })).to.contain('start_stream');
+        expect(renderStreamOverview([camera()], { language: 'en', onDemand: false })).to.contain('start_stream');
+    });
+
+    it('should explain that opening a URL starts the livestream on demand', () => {
+        const html = renderStreamOverview([camera()], { language: 'en', onDemand: true });
+        expect(html).to.contain('starts the livestream');
+        expect(html).not.to.contain('start_stream');
+        expect(renderStreamOverview([camera()], { language: 'de', onDemand: true })).to.contain(
+            'startet den Livestream',
+        );
     });
 
     it('should point out a host name that devices may not resolve', () => {

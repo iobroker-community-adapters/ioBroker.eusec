@@ -796,6 +796,7 @@ export class euSec extends Adapter {
         if (typeof obj === 'object' && obj.command === STREAM_OVERVIEW_COMMAND) {
             const result = renderStreamOverview(await this.collectStreams(), {
                 language: this.language ?? 'en',
+                onDemand: this.onDemand !== undefined,
                 hostnameAuto: this.hostnameAuto,
                 noGo2rtc: !pathToGo2rtc,
             });
