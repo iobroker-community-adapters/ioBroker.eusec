@@ -70,6 +70,26 @@
      * the live edge, which stalls the element for a moment, does not count as a hang.
      */
     const STALL_MIN = 5000;
+    /** How often a player asks again while the station carries the livestream of another camera. */
+    const BUSY_RETRY = 3000;
+    /** How often a player asks again for a camera the adapter could not wake up. */
+    const UNREACHABLE_RETRY = 15000;
+    /** How long a paused player keeps its connection - after that the station is free for others. */
+    const PAUSE_RELEASE = 1000;
+
+    /**
+     * Tells the page that embeds the player what it is doing, so a dashboard can count its own
+     * timeout from the first picture instead of from opening the player:
+     * { type: 'eusec-stream', src, state: 'waiting' | 'unreachable' | 'playing' | 'paused' | 'error', detail }
+     *
+     * @param {string} state What the player does
+     * @param {string} [detail] The camera the station is busy with, or the error
+     */
+    function notify(state, detail) {
+        if (window.parent !== window) {
+            window.parent.postMessage({ type: 'eusec-stream', src: params.get('src'), state, detail }, '*');
+        }
+    }
 
     // video-stream.js only registers the element, it exports nothing. Extending the registered class
     // keeps its status overlay ("loading", the mode, errors) instead of reimplementing it.
@@ -88,6 +108,25 @@
                 this.RECONNECT_TIMEOUT = RECONNECT_MIN;
                 this.stallTimeout = STALL_MIN;
                 this.clearStall();
+                clearTimeout(this.pauseTID);
+                notify('playing');
+            });
+            // A paused player still holds its consumer in go2rtc, and with it the livestream - and
+            // the station, which carries one livestream at a time. Let go, and come back on play.
+            this.video.addEventListener('pause', () => {
+                clearTimeout(this.pauseTID);
+                this.pauseTID = setTimeout(() => {
+                    if (this.video.paused) {
+                        this.ondisconnect();
+                        notify('paused');
+                    }
+                }, PAUSE_RELEASE);
+            });
+            this.video.addEventListener('play', () => {
+                clearTimeout(this.pauseTID);
+                if (!this.ws) {
+                    this.onconnect();
+                }
             });
             // "waiting" is what the element fires when it runs out of buffered data, which is the
             // only sign that the producer is gone - the socket stays open and silent.
@@ -145,6 +184,57 @@
             if (live - this.video.currentTime > MAX_DRIFT) {
                 this.video.currentTime = live - 0.3;
             }
+        }
+
+        /**
+         * A station carries one livestream at a time. While another camera of it is watched, the
+         * adapter refuses this one with a reason that names that camera - see busyReason() in
+         * src/lib/ondemand.ts. That is no error: say what is going on and ask again until the
+         * station is free, so the picture appears without the viewer doing anything.
+         */
+        set divError(value) {
+            const de = (navigator.language || '').toLowerCase().startsWith('de');
+            const unreachable = /Camera not reachable - (.+?)(,|$)/.exec(value);
+            if (unreachable) {
+                // The adapter pauses the starts of a camera that did not answer, so it does not keep
+                // the station busy - try again later.
+                notify('unreachable', unreachable[1]);
+                this.querySelector('.mode').innerText = de ? 'nicht erreichbar' : 'not reachable';
+                this.querySelector('.status').innerText = de
+                    ? `„${unreachable[1]}“ antwortet gerade nicht - neuer Versuch in Kürze.`
+                    : `"${unreachable[1]}" does not answer right now - trying again shortly.`;
+                this.retryLater(UNREACHABLE_RETRY);
+                return;
+            }
+            const busy = /Station busy - (.+?) is streaming/.exec(value);
+            if (!busy) {
+                super.divError = value;
+                notify('error', value);
+                return;
+            }
+            notify('waiting', busy[1]);
+            // The retry below is ours - keep the backoff of a closed socket out of it.
+            this.RECONNECT_TIMEOUT = RECONNECT_MIN;
+            this.querySelector('.mode').innerText = de ? 'wartet' : 'waiting';
+            this.querySelector('.status').innerText = de
+                ? `Die Station überträgt gerade „${busy[1]}“ – dieser Stream startet, sobald sie frei ist.`
+                : `The station is streaming "${busy[1]}" right now - this stream starts as soon as it is free.`;
+            this.retryLater(BUSY_RETRY);
+        }
+
+        /**
+         * Rebuilds the connection after a while - go2rtc keeps the socket open after an error.
+         *
+         * @param {number} delay Milliseconds to wait
+         */
+        retryLater(delay) {
+            clearTimeout(this.busyTID);
+            this.busyTID = setTimeout(() => {
+                if (this.isConnected) {
+                    this.ondisconnect();
+                    this.onconnect();
+                }
+            }, delay);
         }
 
         onclose() {

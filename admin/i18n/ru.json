@@ -286,5 +286,7 @@
     "Low": "Низкое",
     "Medium": "Среднее",
     "High": "Высокое",
-    "Streams": "Потоки"
+    "Streams": "Потоки",
+    "Start livestreams on demand": "Запускать трансляции по запросу",
+    "The livestream of a camera starts as soon as its player page or RTSP URL is opened and stops shortly after the last viewer left - no start_stream needed. The states livestream and livestream_rtsp always carry the URL. A livestream still ends after the maximum duration, but is started again right away while somebody watches: a camera that is watched around the clock streams around the clock, which drains the battery of a battery camera. The player page and the API port of go2rtc have no authentication, the RTSP port only with an RTSP user: every device in the network that reaches these ports can wake the cameras this way.": "Трансляция камеры запускается, как только открывается её страница плеера или RTSP-URL, и останавливается вскоре после ухода последнего зрителя - без start_stream. Состояния livestream и livestream_rtsp всегда содержат URL. Трансляция по-прежнему заканчивается по истечении максимальной длительности, но сразу запускается снова, пока кто-то смотрит: камера, которая показывается круглосуточно, транслирует круглосуточно и разряжает батарею камеры на батарее. Страница плеера и API-порт go2rtc не имеют аутентификации, RTSP-порт - только при заданном пользователе RTSP: любое устройство в сети, которое достигает этих портов, может так разбудить камеры."
 }

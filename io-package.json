@@ -185,6 +185,7 @@
     "maxLivestreamDuration": 120,
     "livestreamDataWait": 15,
     "livestreamQuality": "",
+    "livestreamOnDemand": false,
     "verificationMethod": 2,
     "eventDuration": 15,
     "p2pConnectionType": "quickest",

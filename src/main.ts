@@ -15,6 +15,7 @@ import {
     type PropertyValue,
     type StreamMetadata,
     type PropertyMetadataNumeric,
+    VideoCodec,
     type PropertyMetadataAny,
     type LoginOptions,
     type Picture,
@@ -78,7 +79,8 @@ import {
     type QualityStates,
     resolveStreamingQuality,
 } from './lib/quality';
-import { streamToGo2rtc } from './lib/video';
+import { createVideoFilter, streamToGo2rtc } from './lib/video';
+import { OnDemandStreams, startUntilDelivered } from './lib/ondemand';
 import { parseTalkbackSource, pipeToTalkback, talkbackFfmpegArgs, waitForDeviceEvent } from './lib/talkback';
 
 /** Restart backoff for go2rtc: 1s, 2s, 4s ... capped, reset once it stayed up for a while. */
@@ -122,6 +124,10 @@ export class euSec extends Adapter {
     private readonly qualityHints = new Set<string>();
     /** The address the URLs use because no host name is configured. */
     private hostnameAuto: string | undefined = undefined;
+    /** Feeds go2rtc on request instead of pushing, see the setting "Start livestreams on demand". */
+    private onDemand: OnDemandStreams | undefined = undefined;
+    /** Devices whose on-demand stop waits for the end of their talkback. */
+    private readonly stopsAfterTalkback = new Set<string>();
 
     public constructor(options: Partial<AdapterOptions> = {}) {
         super({
@@ -417,7 +423,7 @@ export class euSec extends Adapter {
             if (pathToGo2rtc) {
                 const go2rtcConfig: {
                     [index: string]: {
-                        [index: string]: string | number | null;
+                        [index: string]: string | string[] | number | null;
                     };
                 } = {
                     api: {
@@ -445,10 +451,42 @@ export class euSec extends Adapter {
                     go2rtcConfig.rtsp.username = this.config.go2rtc_rtsp_username;
                     go2rtcConfig.rtsp.password = this.config.go2rtc_rtsp_password;
                 }
+                if (this.config.livestreamOnDemand) {
+                    const stations = new Map<string, string>();
+                    const names = new Map<string, string>();
+                    for (const device of await this.eufy.getDevices()) {
+                        stations.set(device.getSerial(), device.getStationSerial());
+                        names.set(device.getSerial(), device.getName());
+                    }
+                    this.onDemand = new OnDemandStreams({
+                        start: serial => this.startOnDemandLivestream(serial),
+                        stop: serial => this.stopOnDemandLivestream(serial),
+                        // One P2P session per station carries a single livestream: starting a
+                        // second device of the station ends the first one.
+                        group: serial => stations.get(serial),
+                        name: serial => names.get(serial),
+                        log: {
+                            debug: message => this.logger.debug(message),
+                            info: message => this.logger.info(message),
+                            warn: message => this.logger.warn(message),
+                        },
+                    });
+                    try {
+                        await this.onDemand.listen();
+                    } catch (error) {
+                        this.logger.error('Livestreams on demand are unavailable', error);
+                        this.onDemand = undefined;
+                    }
+                }
                 const compatSerials = parseSerialList(this.config.compatStreamDevices);
                 for (const device of await this.eufy.getDevices()) {
                     const serial = device.getSerial();
-                    go2rtcConfig.streams[serial] = null;
+                    // On demand go2rtc pulls the stream from the adapter whenever it is watched,
+                    // otherwise it waits for the adapter to push one.
+                    go2rtcConfig.streams[serial] =
+                        this.onDemand && device.hasCommand(CommandName.DeviceStartLivestream)
+                            ? this.onDemand.sources(serial)
+                            : null;
                     const streamName = go2rtcStreamName(serial, compatSerials);
                     if (streamName !== serial) {
                         // go2rtc is started with "-config <JSON>" and then refuses every config
@@ -558,6 +596,7 @@ export class euSec extends Adapter {
             // into a shutting down adapter.
             this.terminating = true;
             this.stopGo2rtc();
+            await this.onDemand?.close().catch(() => {});
             for (const talkback of this.talkbacks.values()) {
                 talkback.abort();
             }
@@ -1078,8 +1117,8 @@ export class euSec extends Adapter {
             // not exist in the states database at all, and every getState() on them logs
             // "not found (3)" with a stack trace. Nothing is streaming while the adapter starts,
             // so the empty value is also the correct one for a URL left over from the last run.
-            await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM), { val: '', ack: true });
-            await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP), { val: '', ack: true });
+            // On demand the URLs are always valid: opening them is what starts the livestream.
+            await this.setLivestreamStates(device, this.config.livestreamOnDemand);
         }
 
         if (device.hasProperty(PropertyName.DeviceRTSPStream)) {
@@ -1527,11 +1566,22 @@ export class euSec extends Adapter {
             const device = await this.eufy.getDevice(device_sn);
             const station = await this.eufy.getStation(device.getStationSerial());
 
+            // start_stream and talkback follow the same rule as a player: the station carries one
+            // livestream, and the one somebody already watches is not pushed out.
+            const busy = this.onDemand?.stationBusyWith(device_sn);
+            if (busy) {
+                this.logger.warn(
+                    `The stream for the device ${device_sn} cannot be started, because station ${station.getSerial()} is busy with the livestream of ${busy}, which is being watched`,
+                );
+                return;
+            }
+
             if (station.isConnected() || station.isEnergySavingDevice()) {
                 if (!station.isLiveStreaming(device)) {
                     if (!(await this.enforceVideoStreamingQuality(device))) {
                         this.hintVideoStreamingQuality(device);
                     }
+                    this.logger.info(`Starting the livestream of device ${device_sn}`);
                     await this.eufy.startStationLivestream(device_sn);
                 } else {
                     this.logger.warn(
@@ -1621,6 +1671,8 @@ export class euSec extends Adapter {
             this.logger.error(`Talkback for device ${device_sn} - Error`, error);
         } finally {
             this.talkbacks.delete(device_sn);
+            // Nobody watched the livestream anymore while the talkback played - see stopOnDemandLivestream().
+            const stopDeferred = this.stopsAfterTalkback.delete(device_sn) && !this.onDemand?.isWatched(device_sn);
             // The livestream may have ended already, e.g. after maxLivestreamDuration.
             if (!this.terminating && device && station?.isLiveStreaming(device)) {
                 if (startedTalkback) {
@@ -1628,7 +1680,7 @@ export class euSec extends Adapter {
                         this.logger.error(`Talkback for device ${device_sn} - Error during stopping talkback`, error);
                     });
                 }
-                if (startedLivestream) {
+                if (startedLivestream || stopDeferred) {
                     await this.stopLivestream(device_sn);
                 }
             }
@@ -1666,6 +1718,65 @@ export class euSec extends Adapter {
         this.livestreamTimeouts.delete(device_sn);
     }
 
+    /**
+     * Sets the livestream states of a device to the URLs of its go2rtc stream, or clears them.
+     *
+     * @param device The device
+     * @param available Whether the stream can be played
+     */
+    private async setLivestreamStates(device: Device, available: boolean): Promise<void> {
+        const streamName = go2rtcStreamName(device.getSerial(), parseSerialList(this.config.compatStreamDevices));
+        await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM), {
+            val: available ? buildPlayerUrl(this.config.hostname, this.config.go2rtc_api_port, streamName) : '',
+            ack: true,
+        });
+        await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP), {
+            val: available ? buildRtspUrl(this.config.hostname, this.config.go2rtc_rtsp_port, streamName) : '',
+            ack: true,
+        });
+    }
+
+    /**
+     * Starts a livestream go2rtc asked for, with retries for starts that fail without any event.
+     *
+     * @param device_sn The serial number of the device
+     */
+    private async startOnDemandLivestream(device_sn: string): Promise<void> {
+        await startUntilDelivered(device_sn, {
+            isStreaming: async serial => {
+                const device = await this.eufy.getDevice(serial);
+                const station = await this.eufy.getStation(device.getStationSerial());
+                return station.isLiveStreaming(device);
+            },
+            start: serial => this.startLivestream(serial),
+            stop: serial => this.eufy.stopStationLivestream(serial),
+            isWaiting: serial => this.onDemand?.isWaiting(serial) ?? false,
+            markUnreachable: serial => this.onDemand?.markUnreachable(serial),
+            cancelled: () => this.terminating,
+            sleep: ms => new Promise(resolve => this.setTimeout(resolve, ms, undefined)),
+            log: {
+                debug: message => this.logger.debug(message),
+                info: message => this.logger.info(message),
+                warn: message => this.logger.warn(message),
+            },
+        });
+    }
+
+    /**
+     * Stops a livestream nobody watches anymore. A talkback needs the livestream, so the stop then
+     * waits for the end of the talkback.
+     *
+     * @param device_sn The serial number of the device
+     */
+    private async stopOnDemandLivestream(device_sn: string): Promise<void> {
+        if (this.talkbacks.has(device_sn)) {
+            this.logger.debug(`On-demand stream ${device_sn}: stopping the livestream after the talkback`);
+            this.stopsAfterTalkback.add(device_sn);
+            return;
+        }
+        await this.stopLivestream(device_sn);
+    }
+
     private async onStationLivestreamStart(
         station: Station,
         device: Device,
@@ -1676,15 +1787,23 @@ export class euSec extends Adapter {
         try {
             // The library emits the start with the first data of the camera.
             this.startLivestreamTimeout(device.getSerial());
-            const streamName = go2rtcStreamName(device.getSerial(), parseSerialList(this.config.compatStreamDevices));
-            await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM), {
-                val: buildPlayerUrl(this.config.hostname, this.config.go2rtc_api_port, streamName),
-                ack: true,
-            });
-            await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP), {
-                val: buildRtspUrl(this.config.hostname, this.config.go2rtc_rtsp_port, streamName),
-                ack: true,
-            });
+            await this.setLivestreamStates(device, true);
+            if (this.onDemand) {
+                videostream.on('error', error => {
+                    this.logger.error(`Device: ${device.getSerial()} - Videostream Error`, error);
+                });
+                audiostream.on('error', error => {
+                    this.logger.error(`Device: ${device.getSerial()} - Audiostream Error`, error);
+                });
+                this.onDemand.attach(
+                    device.getSerial(),
+                    videostream,
+                    audiostream,
+                    createVideoFilter(device.getSerial(), metadata, this.logger),
+                    metadata.videoCodec === VideoCodec.H265,
+                );
+                return;
+            }
             //await ffmpegStreamToGo2rtc(this.config, this.namespace, device.getSerial(), metadata, videostream, audiostream, this.logger);
             const results = await streamToGo2rtc(
                 device.getSerial(),
@@ -1729,9 +1848,10 @@ export class euSec extends Adapter {
         // Talkback only works during a livestream.
         this.talkbacks.get(device.getSerial())?.abort();
         this.clearLivestreamTimeout(device.getSerial());
+        // Ends the requests of go2rtc. A stream that is still watched is requested again right away.
+        this.onDemand?.detach(device.getSerial());
         try {
-            await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM), { val: '', ack: true });
-            await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP), { val: '', ack: true });
+            await this.setLivestreamStates(device, this.onDemand !== undefined);
         } catch (error) {
             this.log.error(`Cannot clear the livestream states: ${error as Error}`);
         }
@@ -1779,8 +1899,9 @@ export class euSec extends Adapter {
                     continue;
                 }
                 this.clearLivestreamTimeout(device.getSerial());
-                await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM), { val: '', ack: true });
-                await this.setStateAsync(device.getStateID(DeviceStateID.LIVESTREAM_RTSP), { val: '', ack: true });
+                this.onDemand?.detach(device.getSerial());
+                // On demand the next request of go2rtc starts a livestream once the station is back.
+                await this.setLivestreamStates(device, this.onDemand !== undefined);
             }
         } catch (error) {
             this.logger.error(`Station: ${station.getSerial()} - Error while clearing livestream states`, error);

@@ -11,6 +11,7 @@ declare global {
             maxLivestreamDuration: number;
             livestreamDataWait: number;
             livestreamQuality: string;
+            livestreamOnDemand: boolean;
             eventDuration: number;
             verificationMethod: number;
             p2pConnectionType: string;

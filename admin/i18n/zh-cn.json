@@ -286,5 +286,7 @@
     "Low": "低",
     "Medium": "中",
     "High": "高",
-    "Streams": "视频流"
+    "Streams": "视频流",
+    "Start livestreams on demand": "按需启动直播",
+    "The livestream of a camera starts as soon as its player page or RTSP URL is opened and stops shortly after the last viewer left - no start_stream needed. The states livestream and livestream_rtsp always carry the URL. A livestream still ends after the maximum duration, but is started again right away while somebody watches: a camera that is watched around the clock streams around the clock, which drains the battery of a battery camera. The player page and the API port of go2rtc have no authentication, the RTSP port only with an RTSP user: every device in the network that reaches these ports can wake the cameras this way.": "一旦打开摄像头的播放器页面或 RTSP URL，其直播就会启动，并在最后一位观看者离开后不久停止 - 无需 start_stream。状态 livestream 和 livestream_rtsp 始终包含 URL。直播仍会在达到最长时长后结束，但只要有人观看就会立即重新启动：全天候显示的摄像头会全天候直播，从而耗尽电池摄像头的电量。go2rtc 的播放器页面和 API 端口没有身份验证，RTSP 端口只有在设置了 RTSP 用户时才有：网络中任何能访问这些端口的设备都可以通过这种方式唤醒摄像头。"
 }
