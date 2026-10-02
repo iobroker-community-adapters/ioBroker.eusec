@@ -1509,7 +1509,10 @@ export class euSec extends Adapter {
                 this.namespace,
                 metadata,
             );
-            if (streamToGo2rtcFailed(results)) {
+            // The results only settle once both pipelines ended, which is usually because the
+            // livestream was stopped already - e.g. by the maximum livestream duration after the
+            // audio pipeline broke early. Stopping it a second time only produces a warning.
+            if (streamToGo2rtcFailed(results) && station.isLiveStreaming(device)) {
                 // streamToGo2rtc() settles instead of rejecting, so a broken pipeline never reached
                 // the catch below, and the camera kept streaming into nothing until it timed out.
                 this.logger.warn(

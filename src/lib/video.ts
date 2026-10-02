@@ -60,11 +60,17 @@ export const streamToGo2rtc = async (
             : new stream.PassThrough();
 
     const ingestUrl = `http://localhost:${config.go2rtc_api_port}/api/stream?dst=${camera}`;
+    // Node only sends the request header together with the first chunk of the body. The camera may
+    // take longer than 5 seconds to deliver its first audio (or video) data, and go2rtc drops every
+    // connection whose header did not arrive within its ReadHeaderTimeout of 5 seconds - the POST
+    // then fails with "socket hang up" and the stream stays without that track.
+    const ingest = (): ReturnType<typeof api.stream.post> =>
+        api.stream.post(ingestUrl).on('request', request => request.flushHeaders());
     const results = await Promise.allSettled([
         streamPipeline(
             videoStream,
             videoFilter,
-            api.stream.post(ingestUrl).on('error', (error: any) => {
+            ingest().on('error', (error: any) => {
                 if (!isRegularStreamEnd(error)) {
                     log.error(`streamToGo2rtc(): Got Videostream Error: ${error.message}`);
                 }
@@ -73,7 +79,7 @@ export const streamToGo2rtc = async (
         ),
         streamPipeline(
             audioStream,
-            api.stream.post(ingestUrl).on('error', (error: any) => {
+            ingest().on('error', (error: any) => {
                 if (!isRegularStreamEnd(error)) {
                     log.error(`streamToGo2rtc(): Got Audiostream Error: ${error.message}`);
                 }
