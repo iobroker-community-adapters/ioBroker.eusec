@@ -78,6 +78,8 @@ const GO2RTC_HEALTHY_RUNTIME = 60000;
  * 5 = "Auto / High Encoding") - so the value must be resolved through the label, not hardcoded.
  */
 const VIDEO_STREAMING_QUALITY_AUTO_LABEL = 'Auto';
+/** Default of the setting "Wait for camera data (sec)" - the library gives up after 5 seconds. */
+const LIVESTREAM_DATA_WAIT_DEFAULT = 15;
 
 export class euSec extends Adapter {
     private eufy!: EufySecurity;
@@ -1031,6 +1033,15 @@ export class euSec extends Adapter {
 
     private async onStationAdded(station: Station): Promise<void> {
         this.subscribeStates(`${station.getStateID('', 0)}.*`);
+
+        // The library gives up a livestream when the camera sent nothing for 5 seconds, counted
+        // from the moment the station acknowledged the start. A battery camera that first has to
+        // wake up often needs longer, and the livestream then never delivers a single frame.
+        // Instances from before the setting have no value for it and get the default as well.
+        const dataWait = this.config.livestreamDataWait ?? LIVESTREAM_DATA_WAIT_DEFAULT;
+        if (dataWait > 0) {
+            station.setStreamTimeouts({ streamDataWait: dataWait * 1000 });
+        }
 
         await this.setObjectNotExistsAsync(station.getStateID('', 0), {
             type: 'device',

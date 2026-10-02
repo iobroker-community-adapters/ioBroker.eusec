@@ -1173,6 +1173,18 @@
                     "lg": 3,
                     "xl": 3
                 },
+                "livestreamDataWait": {
+                    "type": "number",
+                    "label": "Wait for camera data (sec)",
+                    "help": "How long a livestream waits for data from the camera before it is given up. The library default of 5 seconds is too short for battery cameras that first have to wake up.",
+                    "min": 5,
+                    "max": 60,
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 4,
+                    "lg": 3,
+                    "xl": 3
+                },
                 "go2rtcHeader": {
                     "type": "header",
                     "text": "go2rtc settings",

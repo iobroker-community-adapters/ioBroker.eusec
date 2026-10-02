@@ -277,5 +277,7 @@
     "Serbia": "Serbia",
     "Sint Maarten (Dutch part)": "Sint Maarten",
     "South Sudan": "Sudan del Sud",
-    "Kosovo": "Kosovo"
+    "Kosovo": "Kosovo",
+    "Wait for camera data (sec)": "Attesa dei dati della telecamera (s)",
+    "How long a livestream waits for data from the camera before it is given up. The library default of 5 seconds is too short for battery cameras that first have to wake up.": "Per quanto tempo un livestream attende i dati della telecamera prima di essere interrotto. I 5 secondi predefiniti della libreria sono troppo pochi per le telecamere a batteria che devono prima svegliarsi."
 }

@@ -277,5 +277,7 @@
     "Serbia": "塞尔维亚",
     "Sint Maarten (Dutch part)": "荷属圣马丁",
     "South Sudan": "南苏丹",
-    "Kosovo": "科索沃"
+    "Kosovo": "科索沃",
+    "Wait for camera data (sec)": "等待摄像头数据（秒）",
+    "How long a livestream waits for data from the camera before it is given up. The library default of 5 seconds is too short for battery cameras that first have to wake up.": "直播在放弃之前等待摄像头数据的时间。对于需要先唤醒的电池摄像头，库默认的 5 秒太短。"
 }

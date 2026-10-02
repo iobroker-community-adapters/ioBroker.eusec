@@ -183,6 +183,7 @@
     "country": "iobroker",
     "pollingInterval": 10,
     "maxLivestreamDuration": 120,
+    "livestreamDataWait": 15,
     "verificationMethod": 2,
     "eventDuration": 15,
     "p2pConnectionType": "quickest",
