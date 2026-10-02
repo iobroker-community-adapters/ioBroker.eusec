@@ -279,5 +279,11 @@
     "South Sudan": "Sudan del Sud",
     "Kosovo": "Kosovo",
     "Wait for camera data (sec)": "Attesa dei dati della telecamera (s)",
-    "How long a livestream waits for data from the camera before it is given up. The library default of 5 seconds is too short for battery cameras that first have to wake up.": "Per quanto tempo un livestream attende i dati della telecamera prima di essere interrotto. I 5 secondi predefiniti della libreria sono troppo pochi per le telecamere a batteria che devono prima svegliarsi."
+    "How long a livestream waits for data from the camera before it is given up. The library default of 5 seconds is too short for battery cameras that first have to wake up.": "Per quanto tempo un livestream attende i dati della telecamera prima di essere interrotto. I 5 secondi predefiniti della libreria sono troppo pochi per le telecamere a batteria che devono prima svegliarsi.",
+    "Livestream quality": "Qualità del livestream",
+    "Sets the streaming quality of every camera to this one before its livestream starts. \"Auto\" lets the camera change the resolution while the livestream runs, which browsers cannot follow - the picture turns green or freezes. The setting changes the camera itself, like the eufy app does.": "Imposta la qualità di streaming di ogni telecamera su questa prima che inizi il suo livestream. Con \"Auto\" la telecamera cambia la risoluzione durante il livestream, cosa che i browser non riescono a seguire: l'immagine diventa verde o si blocca. L'impostazione modifica la telecamera stessa, come fa l'app eufy.",
+    "As set on the camera": "Come impostato sulla telecamera",
+    "Low": "Bassa",
+    "Medium": "Media",
+    "High": "Alta"
 }

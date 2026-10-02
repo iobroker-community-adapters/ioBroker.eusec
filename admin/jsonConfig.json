@@ -1185,6 +1185,22 @@
                     "lg": 3,
                     "xl": 3
                 },
+                "livestreamQuality": {
+                    "type": "select",
+                    "label": "Livestream quality",
+                    "help": "Sets the streaming quality of every camera to this one before its livestream starts. \"Auto\" lets the camera change the resolution while the livestream runs, which browsers cannot follow - the picture turns green or freezes. The setting changes the camera itself, like the eufy app does.",
+                    "options": [
+                        { "label": "As set on the camera", "value": "" },
+                        { "label": "Low", "value": "low" },
+                        { "label": "Medium", "value": "medium" },
+                        { "label": "High", "value": "high" }
+                    ],
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 4,
+                    "lg": 3,
+                    "xl": 3
+                },
                 "go2rtcHeader": {
                     "type": "header",
                     "text": "go2rtc settings",

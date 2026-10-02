@@ -279,5 +279,11 @@
     "South Sudan": "南苏丹",
     "Kosovo": "科索沃",
     "Wait for camera data (sec)": "等待摄像头数据（秒）",
-    "How long a livestream waits for data from the camera before it is given up. The library default of 5 seconds is too short for battery cameras that first have to wake up.": "直播在放弃之前等待摄像头数据的时间。对于需要先唤醒的电池摄像头，库默认的 5 秒太短。"
+    "How long a livestream waits for data from the camera before it is given up. The library default of 5 seconds is too short for battery cameras that first have to wake up.": "直播在放弃之前等待摄像头数据的时间。对于需要先唤醒的电池摄像头，库默认的 5 秒太短。",
+    "Livestream quality": "直播画质",
+    "Sets the streaming quality of every camera to this one before its livestream starts. \"Auto\" lets the camera change the resolution while the livestream runs, which browsers cannot follow - the picture turns green or freezes. The setting changes the camera itself, like the eufy app does.": "在每个摄像头开始直播之前，将其串流画质设置为此值。\"Auto\" 会让摄像头在直播过程中改变分辨率，浏览器无法跟上 - 画面会变绿或卡住。此设置会像 eufy 应用一样直接更改摄像头本身。",
+    "As set on the camera": "保持摄像头当前设置",
+    "Low": "低",
+    "Medium": "中",
+    "High": "高"
 }

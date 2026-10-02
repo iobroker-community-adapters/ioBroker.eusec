@@ -10,6 +10,7 @@ declare global {
             pollingInterval: number;
             maxLivestreamDuration: number;
             livestreamDataWait: number;
+            livestreamQuality: string;
             eventDuration: number;
             verificationMethod: number;
             p2pConnectionType: string;

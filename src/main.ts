@@ -63,6 +63,13 @@ import {
     parseSerialList,
 } from './lib/eufyApiCompat';
 import { buildPlayerUrl, compatStreamSource, go2rtcStreamName, streamToGo2rtcFailed } from './lib/go2rtc';
+import {
+    fixedStreamingQualities,
+    isAutoStreamingQuality,
+    LIVESTREAM_QUALITY_LABELS,
+    type QualityStates,
+    resolveStreamingQuality,
+} from './lib/quality';
 import { streamToGo2rtc } from './lib/video';
 import { parseTalkbackSource, pipeToTalkback, talkbackFfmpegArgs, waitForDeviceEvent } from './lib/talkback';
 
@@ -71,13 +78,6 @@ const GO2RTC_RESTART_DELAY_MIN = 1000;
 const GO2RTC_RESTART_DELAY_MAX = 30000;
 const GO2RTC_HEALTHY_RUNTIME = 60000;
 
-/**
- * Label prefix of the "Auto" entries in DeviceVideoStreamingQualityProperty.states. The numeric
- * value behind it differs per device family - the base property and the S350 use 0, eufyCam 3 and
- * the Professional models use 5, and battery doorbells have both (0 = "Auto / Low Encoding",
- * 5 = "Auto / High Encoding") - so the value must be resolved through the label, not hardcoded.
- */
-const VIDEO_STREAMING_QUALITY_AUTO_LABEL = 'Auto';
 /** Default of the setting "Wait for camera data (sec)" - the library gives up after 5 seconds. */
 const LIVESTREAM_DATA_WAIT_DEFAULT = 15;
 /**
@@ -108,6 +108,8 @@ export class euSec extends Adapter {
     private readonly p2pPictureRequests = new Set<string>();
     /** Maximum livestream duration per device, counted from the first picture. */
     private readonly livestreamTimeouts = new Map<string, ioBroker.Timeout | undefined>();
+    /** Devices and qualities the streaming quality hints were logged for in this run. */
+    private readonly qualityHints = new Set<string>();
 
     public constructor(options: Partial<AdapterOptions> = {}) {
         super({
@@ -1366,28 +1368,92 @@ export class euSec extends Adapter {
     }
 
     /**
-     * Tells whether a device streams at the "Auto" quality, where the camera is free to change the
-     * resolution mid-stream. The numeric value of "Auto" is not the same for every device family,
-     * so it is resolved through the state label of the property metadata.
+     * Reads the streaming quality of a device: the states of the property and its current value.
      *
-     * @param device The device to check
-     * @returns true if the streaming quality is one of the "Auto" settings
+     * @param device The device
+     * @returns The states and the value, or undefined if the device has no streaming quality
      */
-    private isVideoStreamingQualityAuto(device: Device): boolean {
+    private getVideoStreamingQuality(device: Device): { states: QualityStates | undefined; value: number } | undefined {
         if (!device.hasProperty(PropertyName.DeviceVideoStreamingQuality)) {
+            return undefined;
+        }
+        const metadata = device.getPropertyMetadata(
+            PropertyName.DeviceVideoStreamingQuality,
+        ) as PropertyMetadataNumeric;
+        return {
+            states: metadata?.states,
+            value: device.getPropertyValue(PropertyName.DeviceVideoStreamingQuality) as number,
+        };
+    }
+
+    /**
+     * Sets the streaming quality of a device to the one of the setting "Livestream quality" before
+     * its livestream starts.
+     *
+     * @param device The device whose livestream starts
+     * @returns true if the setting decides the quality, so the "Auto" hint does not apply
+     */
+    private async enforceVideoStreamingQuality(device: Device): Promise<boolean> {
+        try {
+            const quality = this.getVideoStreamingQuality(device);
+            if (!quality) {
+                return false;
+            }
+            const change = resolveStreamingQuality(quality.states, quality.value, this.config.livestreamQuality);
+            if (change.kind === 'unavailable') {
+                if (!this.qualityHints.has(`${device.getSerial()}:unavailable`)) {
+                    this.qualityHints.add(`${device.getSerial()}:unavailable`);
+                    this.logger.warn(
+                        `Device ${device.getSerial()} offers no streaming quality "${change.wanted}" (${fixedStreamingQualities(quality.states)}) - the setting "Livestream quality" is ignored for it`,
+                    );
+                }
+                return false;
+            }
+            if (change.kind === 'keep') {
+                return LIVESTREAM_QUALITY_LABELS[this.config.livestreamQuality] !== undefined;
+            }
+            await this.eufy.setDeviceProperty(
+                device.getSerial(),
+                PropertyName.DeviceVideoStreamingQuality,
+                change.value,
+            );
+            this.logger.info(
+                `Device ${device.getSerial()}: setting the streaming quality from "${change.from}" to "${change.to}" (setting "Livestream quality")`,
+            );
+            return true;
+        } catch (error) {
+            // A camera that refuses the change still streams - only the quality is not the wanted one.
+            this.logger.warn(`Device ${device.getSerial()} - Could not set the streaming quality`, error);
             return false;
         }
+    }
+
+    /**
+     * Warns once per device, quality and run when a livestream starts at an "Auto" streaming
+     * quality, where the camera is free to change the resolution mid-stream.
+     *
+     * Measured on a T84A1: 2048x1536 -> 800x600 -> 1600x1200 within 20 seconds. Every switch is a
+     * new SPS, and go2rtc does not hand out a new MSE init segment for it, so browsers keep
+     * decoding against the old one.
+     *
+     * @param device The device whose livestream starts
+     */
+    private hintVideoStreamingQuality(device: Device): void {
         try {
-            const metadata = device.getPropertyMetadata(
-                PropertyName.DeviceVideoStreamingQuality,
-            ) as PropertyMetadataNumeric;
-            const value = device.getPropertyValue(PropertyName.DeviceVideoStreamingQuality);
-            const label = metadata?.states?.[value as number];
-            return typeof label === 'string' && label.startsWith(VIDEO_STREAMING_QUALITY_AUTO_LABEL);
+            const quality = this.getVideoStreamingQuality(device);
+            const label = quality?.states?.[quality.value];
+            const key = `${device.getSerial()}:${quality?.value}`;
+            if (!quality || !isAutoStreamingQuality(label) || this.qualityHints.has(key)) {
+                return;
+            }
+            this.qualityHints.add(key);
+            const stateId = `${this.namespace}.${device.getStateID(convertCamelCaseToSnakeCase(PropertyName.DeviceVideoStreamingQuality))}`;
+            this.logger.warn(
+                `Device ${device.getSerial()} streams at the quality "${label}": the camera then changes the resolution while the livestream runs, which browsers cannot follow - the picture turns green, shows artifacts or freezes. Set a fixed quality in ${stateId} (${fixedStreamingQualities(quality.states)}), in the eufy app, or for all devices with the setting "Livestream quality" of the adapter.`,
+            );
         } catch (error) {
             // Only feeds a warning - it must never keep a livestream from starting.
             this.logger.debug(`Device: ${device.getSerial()} - Could not determine the video streaming quality`, error);
-            return false;
         }
     }
 
@@ -1398,13 +1464,8 @@ export class euSec extends Adapter {
 
             if (station.isConnected() || station.isEnergySavingDevice()) {
                 if (!station.isLiveStreaming(device)) {
-                    if (this.isVideoStreamingQualityAuto(device)) {
-                        // Measured on a T84A1: 2048x1536 -> 800x600 -> 1600x1200 within 20 seconds.
-                        // Every switch is a new SPS, and go2rtc does not hand out a new MSE init
-                        // segment for it, so browsers keep decoding against the old one.
-                        this.logger.warn(
-                            `The video streaming quality of device ${device_sn} is set to "Auto". The camera may change the resolution while the stream is running, which browsers using MSE cannot follow (green picture or artifacts). Set a fixed quality if you see this.`,
-                        );
+                    if (!(await this.enforceVideoStreamingQuality(device))) {
+                        this.hintVideoStreamingQuality(device);
                     }
                     await this.eufy.startStationLivestream(device_sn);
                 } else {
