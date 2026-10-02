@@ -257,7 +257,9 @@ export class euSec extends Adapter {
         const hosts = await this.getForeignObjectsAsync('system.host.*', 'host');
         if (hosts !== undefined && hosts !== null && Object.values(hosts).length !== 0) {
             if (this.config.hostname === '') {
-                this.config.hostname = Object.values(hosts)[0].native.os.hostname;
+                // The host this instance runs on - with several hosts the first one is any of them.
+                const host = hosts[`system.host.${this.host}`] ?? Object.values(hosts)[0];
+                this.config.hostname = host.native.os.hostname;
             }
         }
 

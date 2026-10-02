@@ -62,6 +62,7 @@ A detailed description (in German) is available at our forum (https://forum.iobr
 ### **WORK IN PROGRESS**
 - (typhosj) Floodlight Cam E30 (T8426): preset positions are now sent to the camera (before, writing `preset_position`, `save_preset_position` or `delete_preset_position` had no effect), and the livestream is no longer rejected with `ERROR_INVALID_ACCOUNT`. The camera now gets the commands of the Floodlight Cam E340, which the library already defines it like (reported in the forum)
 - (hdering) Livestream: the audio track (or, with a slow camera, the whole stream) no longer breaks after 5 seconds with `socket hang up`. Node only sent the request header to go2rtc with the first data, and go2rtc drops connections whose header does not arrive within 5 seconds. A livestream that already ended is no longer stopped a second time, which logged a misleading warning
+- (hdering) Without a configured host name, the livestream URLs (states `livestream`, `livestream_rtsp`) use the name of the host the instance runs on. With several ioBroker hosts they used the name of the first host, which is not necessarily the one that runs go2rtc
 
 ### 3.3.0 (2026-09-21)
 - (typhosj) **Breaking:** the tilt down button of pan and tilt cameras is renamed from `titl_down` to `tilt_down`. The update moves the existing object with its name and custom settings (e.g. history); scripts and visualizations that use the old id have to be changed to `tilt_down`
