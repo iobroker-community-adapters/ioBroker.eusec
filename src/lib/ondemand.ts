@@ -52,6 +52,8 @@ export interface OnDemandOptions {
     startBlock: number;
     /** How long a device whose start attempts all failed is not started again. */
     unreachableFor: number;
+    /** How many bytes may wait for go2rtc before it counts as not keeping up. */
+    maxBuffered: number;
 }
 
 export const DEFAULT_START_ATTEMPT_OPTIONS: StartAttemptOptions = {
@@ -76,6 +78,8 @@ export const DEFAULT_OPTIONS: OnDemandOptions = {
     // The slowest start that still delivered took 62 seconds.
     startBlock: 70000,
     unreachableFor: 60000,
+    // Several keyframes of a 4K camera - far more than a reader that keeps up ever leaves waiting.
+    maxBuffered: 4 * 1024 * 1024,
 };
 
 const SERIAL = /^[A-Za-z0-9_-]+$/;
@@ -569,7 +573,11 @@ export class OnDemandStreams {
                 // go2rtc detects the format from the data itself.
                 sink.response.writeHead(200, { 'Content-Type': 'application/octet-stream' });
             }
-            if (!sink.response.write(data)) {
+            sink.response.write(data);
+            // write() returns false for every chunk of 16 KB or more, also while go2rtc reads
+            // everything right away - every keyframe would count as congestion, and go2rtc would
+            // only ever get keyframes. Only a backlog that kept growing means it does not keep up.
+            if (sink.response.writableLength > this.options.maxBuffered) {
                 // The camera does not wait for a slow reader, so buffering for it would grow
                 // without limit. Drop the data instead, and go on at the next keyframe or audio
                 // frame once the response drained - go2rtc cannot decode from the middle of one.

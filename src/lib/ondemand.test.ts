@@ -329,6 +329,52 @@ describe('ondemand => OnDemandStreams', () => {
         }
     });
 
+    it('should pass keyframes of 16 KB and more to a reader that keeps up, and drop beyond maxBuffered', async () => {
+        const debugs: string[] = [];
+        const streams: OnDemandStreams = new OnDemandStreams(
+            {
+                start: untilDelivered(() => streams),
+                stop: () => Promise.resolve(),
+                log: { ...silent, debug: message => void debugs.push(message) },
+            },
+            { idleStopDelay: 300, firstDataTimeout: 1500, audioTimeout: 100, maxBuffered: 100 * 1024 },
+        );
+        await streams.listen();
+        try {
+            let received = 0;
+            http.get(streams.sources('CAM1')[0], res => res.on('data', (data: Buffer) => (received += data.length)));
+            await wait(50);
+            const cameraVideo = new stream.PassThrough();
+            streams.attach('CAM1', cameraVideo, new stream.PassThrough());
+            // A camera keyframe is far larger than the 16 KB at which write() starts returning false.
+            const frames = [
+                keyframe('x'.repeat(16 * 1024 - 5)),
+                Buffer.from([0, 0, 0, 1, 0x41, 1]),
+                keyframe('y'.repeat(64 * 1024)),
+                Buffer.from([0, 0, 0, 1, 0x41, 2]),
+                // Just below maxBuffered, with room for the framing of the chunked response.
+                keyframe('z'.repeat(100 * 1024 - 64)),
+                Buffer.from([0, 0, 0, 1, 0x41, 3]),
+            ];
+            for (const frame of frames) {
+                cameraVideo.write(frame);
+                await wait(20);
+            }
+            const sent = frames.reduce((sum, frame) => sum + frame.length, 0);
+            expect(debugs.some(message => message.includes('dropping data'))).to.equal(false);
+            expect(received).to.equal(sent);
+
+            // One chunk above maxBuffered is a backlog, however fast the reader is.
+            cameraVideo.write(keyframe('w'.repeat(100 * 1024)));
+            cameraVideo.write(Buffer.from([0, 0, 0, 1, 0x41, 4]));
+            await wait(50);
+            expect(debugs.some(message => message.includes('dropping data'))).to.equal(true);
+            expect(received).to.equal(sent + 5 + 100 * 1024);
+        } finally {
+            await streams.close();
+        }
+    });
+
     it('should report a waiting request until the livestream arrives', async () => {
         await create();
         expect(streams.isWaiting('CAM1')).to.equal(false);
