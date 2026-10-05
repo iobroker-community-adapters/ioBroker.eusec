@@ -282,8 +282,8 @@ export class euSec extends Adapter {
         // it was only ever needed on node 20.11.1 and later, and node 22 and newer - the adapter
         // declares node 24 in "engines" - reject the flag outright ("Attempt to revert an unknown
         // CVE", exit code 12), which keeps the adapter process from starting at all. Removing a
-        // flag left over from an older installation therefore cannot be done from in here; that is
-        // what the cleanupCveFix.js postinstall script is for, which runs in a plain node process.
+        // flag left over from an older installation therefore cannot be done from in here; the
+        // empty common.nodeProcessParams in io-package.json clears it when the adapter is upgraded.
         const hosts = await this.getForeignObjectsAsync('system.host.*', 'host');
         if (hosts !== undefined && hosts !== null && Object.values(hosts).length !== 0) {
             if (this.config.hostname === '') {

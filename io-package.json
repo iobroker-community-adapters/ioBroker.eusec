@@ -153,6 +153,7 @@
     "tier": 2,
     "messagebox": true,
     "stopBeforeUpdate": true,
+    "nodeProcessParams": [],
     "nogit": true,
     "dependencies": [
       {

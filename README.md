@@ -45,7 +45,7 @@ This adapter would not have been possible without the great work of Patrick Broe
 
 Adapter 2.x and older added `--security-revert=CVE-2023-46809` to the node process parameters of every instance running on node.js 18 or 20. node.js 22 and newer refuse to start an instance with that flag, and this adapter requires node.js 24.
 
-Installing this adapter removes the flag from all eusec instances automatically; other node process parameters are kept. If an instance still does not start and its log shows `--security-revert=CVE-2023-46809`, remove the parameters by hand and restart the instance:
+Updating this adapter clears the node process parameters of all eusec instances, which removes the flag. Other parameters (e.g. `--max-old-space-size`) are cleared as well and have to be entered again after each update. If an instance still does not start and its log shows `--security-revert=CVE-2023-46809`, remove the parameters by hand and restart the instance:
 
 ```
 iobroker object set system.adapter.eusec.0 common.nodeProcessParams=[]
@@ -59,6 +59,9 @@ A detailed description (in German) is available at our forum (https://forum.iobr
 	Placeholder for the next version (at the beginning of the line):
 	### **WORK IN PROGRESS**
 -->
+### **WORK IN PROGRESS**
+- (typhosj) Updating the adapter clears the node process parameters of all eusec instances again, which removes `--security-revert=CVE-2023-46809` left over from adapter 2.x. The install script that removed only this flag is gone, since install scripts are not allowed for ioBroker adapters. Other parameters such as `--max-old-space-size` have to be entered again after each update
+
 ### 3.4.0 (2026-10-02)
 - (typhosj) Floodlight Cam E30 (T8426): preset positions are now sent to the camera (before, writing `preset_position`, `save_preset_position` or `delete_preset_position` had no effect), and the livestream is no longer rejected with `ERROR_INVALID_ACCOUNT`. The camera now gets the commands of the Floodlight Cam E340, which the library already defines it like (reported in the forum)
 - (hdering) **Changed URLs:** without a configured host name, the livestream URLs (states `livestream`, `livestream_rtsp`) now use the IPv4 address in the LAN of the ioBroker host the instance runs on instead of the name of the first ioBroker host (e.g. `http://192.168.1.10:1984/...` instead of `http://iobroker:1984/...`). Tablets, phones and dashboards often cannot resolve the name, and with several hosts the first one is not necessarily the one that runs go2rtc. Visualizations and scripts that store the URL get the new one with the next livestream; to keep a name, enter it in the setting "Hostname"
