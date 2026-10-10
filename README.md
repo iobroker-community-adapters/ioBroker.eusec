@@ -59,6 +59,9 @@ A detailed description (in German) is available at our forum (https://forum.iobr
 	Placeholder for the next version (at the beginning of the line):
 	### **WORK IN PROGRESS**
 -->
+### **WORK IN PROGRESS**
+- (hdering) The eufyCam C37 (T814X) is no longer an unknown device without states; the adapter handles it like the eufyCam S4, which gives it livestream, motion, person and vehicle detection, light, pan and tilt and battery states (#198)
+
 ### 3.4.2 (2026-10-05)
 - (typhosj) On-demand livestreams no longer show only a picture every few seconds and then go black. Since 3.4.0 every keyframe of 16 KB or more was taken for a go2rtc that does not keep up, and the video up to the next keyframe was dropped. Data is now only dropped once more than 4 MB wait for go2rtc (reported in the forum)
 

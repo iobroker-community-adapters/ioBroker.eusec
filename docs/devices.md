@@ -10,6 +10,7 @@ with the library alone; the adapter corrects them itself.
 | Device | What works | Known limits | Issue |
 | --- | --- | --- | --- |
 | eufyCam C31 (T817L) | Livestream, motion and person detection, light, alarm. The library does not know the camera; the adapter handles it like the SoloCam Spotlight 1080. | No pan and tilt yet. The camera shows battery states although it is mains powered. | [#156](https://github.com/iobroker-community-adapters/ioBroker.eusec/issues/156) |
+| eufyCam C37 (T814X) | The library does not know the camera; the adapter handles it like the eufyCam S4, which gives it livestream, motion, person and vehicle detection, light, pan and tilt and battery states. | Not confirmed on a real camera yet. The `enabled` state has no value, since the camera does not report it. | [#198](https://github.com/iobroker-community-adapters/ioBroker.eusec/issues/198) |
 | Floodlight Cam E30 (T8426) | Livestream, preset positions, pan and tilt. The library sends the camera the commands of older floodlights; the adapter sends it those of the Floodlight Cam E340 (T8425) instead. | Talkback, calibration and the light and detection settings are not confirmed on a real camera yet. Available from 3.4.0. | |
 
 Your device is missing from both lists or does not work as described? Open an
