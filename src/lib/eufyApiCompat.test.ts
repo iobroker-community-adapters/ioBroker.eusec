@@ -58,6 +58,12 @@ describe('eufyApiCompat => substituteDeviceTypes', () => {
         expect(list[0]).to.deep.equal({ device_sn: 'T817L', device_type: 60, params: [] });
     });
 
+    it('should give the eufyCam C37 the type of the eufyCam S4', () => {
+        const list = [{ device_sn: 'T814X', device_type: 10037, params: [] }];
+        expect(substituteDeviceTypes(list)).to.deep.equal([{ type: 10037, entry: list[0] }]);
+        expect(list[0]).to.deep.equal({ device_sn: 'T814X', device_type: 89, params: [] });
+    });
+
     it('should leave known and other unknown types untouched', () => {
         const list = [{ device_type: 60 }, { device_type: 10030 }, { device_type: 0 }, { device_type: -1 }];
         expect(substituteDeviceTypes(list)).to.deep.equal([]);
@@ -96,6 +102,13 @@ describe('eufyApiCompat => describeSubstitutedDevice', () => {
         expect(line).to.include('Einfahrt (type 10031, model T817L, firmware 1.0.4, hardware P1)');
         expect(line).to.include('#156');
         expect(line).to.include('[{"param_type":1011,"param_value":"1"}]');
+    });
+
+    it('should point a C37 to its own issue', () => {
+        const line = describeSubstitutedDevice({ type: 10037, entry: { device_model: 'T814X' } });
+        expect(line).to.include('(type 10037, model T814X');
+        expect(line).to.include('#198');
+        expect(line).not.to.include('#156');
     });
 
     it('should not throw on an entry without any fields', () => {
@@ -179,6 +192,7 @@ describe('eufyApiCompat => applyEufyApiCompatibility', () => {
             return Promise.resolve([
                 { device_sn: 'T8170', device_type: 10031, params: [] },
                 { device_sn: 'T8000', device_type: 1, params: [] },
+                { device_sn: 'T8140', device_type: 10037, params: [] },
             ] as unknown as DeviceListResponse[]);
         };
         HTTPApi.prototype.getStationList = function (): Promise<StationListResponse[]> {
@@ -244,11 +258,13 @@ describe('eufyApiCompat => applyEufyApiCompatibility', () => {
     });
 
     it('should substitute unknown device types in the device and the station list', async () => {
-        expect((await api.getDeviceList()).map(device => device.device_type)).to.deep.equal([60, 1]);
+        expect((await api.getDeviceList()).map(device => device.device_type)).to.deep.equal([60, 1, 89]);
         expect((await api.getStationList()).map(station => station.device_type)).to.deep.equal([60]);
         await api.getDeviceList();
         expect(messages.filter(message => message.includes('Device type 10031')).length, 'logged once').to.equal(1);
-        expect(messages.filter(message => message.startsWith('Parameters of')).length, 'once per device').to.equal(1);
+        expect(messages.filter(message => message.includes('Device type 10037')).length, 'logged once').to.equal(1);
+        expect(messages.find(message => message.includes('Device type 10037'))).to.include('type 89 - see #198');
+        expect(messages.filter(message => message.startsWith('Parameters of')).length, 'once per device').to.equal(2);
     });
 
     describe('kept P2P connection', () => {
