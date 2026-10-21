@@ -47,8 +47,20 @@ export const fixedStreamingQualities = (states: QualityStates | undefined): stri
         .join(', ');
 
 /**
+ * Tells whether a label is one of the qualities Low, Medium or High, with or without an encoding.
+ *
+ * @param label The state label
+ * @returns true for "Medium" and "Medium / Low Encoding", false for "1080P"
+ */
+const isNamedQuality = (label: string): boolean =>
+    Object.values(LIVESTREAM_QUALITY_LABELS).some(name => label === name || label.startsWith(`${name} / `));
+
+/**
  * Resolves the streaming quality a device has to be set to for the setting "Livestream quality".
  * A battery doorbell combines the quality with an encoding ("Medium / Low Encoding"), which is kept.
+ * A device that names its qualities by resolution only ("HD (720P)", "Full HD (1080P)", "3K HD")
+ * gets them in ascending order: low = the lowest, medium = the second, high = the third. A fourth
+ * one ("Ultra 4K") stays out, like "Ultra 4K" next to "High" on the eufyCam 3.
  *
  * @param states The states of the streaming quality property of the device
  * @param value The current value of the property
@@ -65,17 +77,22 @@ export const resolveStreamingQuality = (
         return { kind: 'keep' };
     }
     const current = states?.[value] ?? String(value);
-    if (current === wanted || current.startsWith(`${wanted} / `)) {
-        return { kind: 'keep' };
-    }
+    // Integer keys come out of Object.entries in ascending order, which is the order of the qualities.
     const entries = Object.entries(states ?? {});
+    const fixed = entries.filter(([, label]) => !isAutoStreamingQuality(label));
     const encoding = current.includes(' / ') ? current.slice(current.indexOf(' / ')) : '';
     const target =
         entries.find(([, label]) => label === `${wanted}${encoding}`) ??
         entries.find(([, label]) => label === wanted) ??
-        entries.find(([, label]) => label.startsWith(`${wanted} / `));
+        entries.find(([, label]) => label.startsWith(`${wanted} / `)) ??
+        (fixed.some(([, label]) => isNamedQuality(label))
+            ? undefined
+            : fixed[Object.keys(LIVESTREAM_QUALITY_LABELS).indexOf(setting)]);
     if (!target) {
         return { kind: 'unavailable', wanted };
+    }
+    if (Number(target[0]) === value) {
+        return { kind: 'keep' };
     }
     return { kind: 'set', value: Number(target[0]), from: current, to: target[1] };
 };

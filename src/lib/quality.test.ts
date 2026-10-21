@@ -7,6 +7,8 @@ const CAMERA = { 0: 'Auto', 1: 'Low', 2: 'Medium', 3: 'High' };
 const CAMERA_3 = { 5: 'Auto', 6: 'Low', 7: 'Medium', 8: 'High', 10: 'Ultra 4K' };
 const C35 = { 0: 'Auto', 1: 'High', 2: 'Medium' };
 const PROFESSIONAL = { 5: 'Auto', 6: '720P', 7: '1080P', 8: '2K', 10: 'Ultra 4K' };
+const S340 = { 0: 'Auto', 1: 'HD (720P)', 2: 'Full HD (1080P)', 3: '3K HD' };
+const S350 = { 0: 'Auto', 1: 'HD (720P)', 2: 'Full HD (1080P)', 3: '2K HD', 4: 'Ultra 4K' };
 const BATTERY_DOORBELL = {
     0: 'Auto / Low Encoding',
     1: 'Low / Low Encoding',
@@ -27,6 +29,7 @@ describe('quality => resolveStreamingQuality', () => {
     it('should keep a device that already streams at the wanted quality', () => {
         expect(resolveStreamingQuality(CAMERA, 2, 'medium')).to.deep.equal({ kind: 'keep' });
         expect(resolveStreamingQuality(BATTERY_DOORBELL, 7, 'medium')).to.deep.equal({ kind: 'keep' });
+        expect(resolveStreamingQuality(S340, 3, 'high')).to.deep.equal({ kind: 'keep' });
     });
 
     it('should resolve the value through the label, not a fixed number', () => {
@@ -65,10 +68,51 @@ describe('quality => resolveStreamingQuality', () => {
         });
     });
 
+    it('should map the setting onto qualities named by resolution, lowest first', () => {
+        expect(resolveStreamingQuality(S340, 0, 'low')).to.deep.equal({
+            kind: 'set',
+            value: 1,
+            from: 'Auto',
+            to: 'HD (720P)',
+        });
+        expect(resolveStreamingQuality(S340, 0, 'medium')).to.deep.equal({
+            kind: 'set',
+            value: 2,
+            from: 'Auto',
+            to: 'Full HD (1080P)',
+        });
+        expect(resolveStreamingQuality(S340, 1, 'high')).to.deep.equal({
+            kind: 'set',
+            value: 3,
+            from: 'HD (720P)',
+            to: '3K HD',
+        });
+    });
+
+    it('should leave a fourth quality named by resolution out, like "Ultra 4K" next to "High"', () => {
+        expect(resolveStreamingQuality(S350, 4, 'high')).to.deep.equal({
+            kind: 'set',
+            value: 3,
+            from: 'Ultra 4K',
+            to: '2K HD',
+        });
+        expect(resolveStreamingQuality(PROFESSIONAL, 5, 'high')).to.deep.equal({
+            kind: 'set',
+            value: 8,
+            from: 'Auto',
+            to: '2K',
+        });
+    });
+
     it('should report a quality the device does not offer', () => {
         expect(resolveStreamingQuality(C35, 0, 'low')).to.deep.equal({ kind: 'unavailable', wanted: 'Low' });
-        expect(resolveStreamingQuality(PROFESSIONAL, 5, 'high')).to.deep.equal({ kind: 'unavailable', wanted: 'High' });
         expect(resolveStreamingQuality(undefined, 0, 'high')).to.deep.equal({ kind: 'unavailable', wanted: 'High' });
+        expect(resolveStreamingQuality({}, 0, 'low')).to.deep.equal({ kind: 'unavailable', wanted: 'Low' });
+        expect(resolveStreamingQuality({ 0: 'Auto' }, 0, 'low')).to.deep.equal({ kind: 'unavailable', wanted: 'Low' });
+        expect(resolveStreamingQuality({ 0: 'Auto', 1: '720P', 2: '1080P' }, 0, 'high')).to.deep.equal({
+            kind: 'unavailable',
+            wanted: 'High',
+        });
     });
 
     it('should cope with a value that has no label', () => {
