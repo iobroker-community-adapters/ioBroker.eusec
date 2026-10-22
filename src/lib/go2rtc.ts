@@ -69,11 +69,16 @@ export const go2rtcStreamName = (serial: string, compatSerials: string[]): strin
  * A width of -2 lets ffmpeg keep the aspect ratio and round the width to an even number, which
  * the H.264 encoder requires; -1 could produce an odd width.
  *
+ * `-fps_mode passthrough` keeps the timestamps of the incoming video. For RTSP output ffmpeg
+ * otherwise picks a constant frame rate and fills the start with repeated frames, so the video ran
+ * 2-4 s ahead of the copied audio and VLC dropped all sound. Known limit: `-fps_mode` needs
+ * ffmpeg 5.1 or newer; ffmpeg-for-homebridge ships 8.0, only a system ffmpeg fallback can be older.
+ *
  * @param serial Serial of the device
  * @returns The source string for the go2rtc configuration
  */
 export const compatStreamSource = (serial: string): string =>
-    `ffmpeg:${serial}#video=h264#width=-2#height=720#audio=copy`;
+    `ffmpeg:${serial}#video=h264#width=-2#height=720#audio=copy#raw=-fps_mode passthrough`;
 
 /**
  * Builds the URL of the livestream player page. The page is served by go2rtc itself, because

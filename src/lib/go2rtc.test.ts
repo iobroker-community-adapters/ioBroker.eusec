@@ -57,7 +57,13 @@ describe('go2rtc => go2rtcStreamName', () => {
     });
 
     it('should build the compatibility stream from the stream the device pushes into', () => {
-        expect(compatStreamSource('T84A1P00')).to.match(/^ffmpeg:T84A1P00#video=h264#.*#audio=copy$/);
+        expect(compatStreamSource('T84A1P00')).to.match(/^ffmpeg:T84A1P00#video=h264#.*#audio=copy(#|$)/);
+    });
+
+    it('should keep the timestamps of the video, so the copied audio stays in sync', () => {
+        // With the constant frame rate ffmpeg picks for RTSP output, it filled the start with
+        // repeated frames and the video ran 2-4 s ahead of the audio; VLC then played no sound.
+        expect(compatStreamSource('T84A1P00')).to.include('#raw=-fps_mode passthrough');
     });
 
     it('should fix only the height of the compatibility stream, so the aspect ratio is kept', () => {
