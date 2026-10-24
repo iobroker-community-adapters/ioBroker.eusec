@@ -20,6 +20,8 @@ import {
     eufyClientOptions,
     isIdentityRejected,
     describeSubstitutedDevice,
+    excludeDevices,
+    isExcludedEntry,
     keepStationsConnected,
     normalizeSuccessCode,
     parseSerialList,
@@ -49,6 +51,36 @@ describe('eufyApiCompat => parseSerialList', () => {
         expect(parseSerialList(42)).to.deep.equal([]);
         expect(parseSerialList({ 0: 'T1' })).to.deep.equal([]);
         expect(parseSerialList([])).to.deep.equal([]);
+    });
+});
+
+describe('eufyApiCompat => isExcludedEntry', () => {
+    afterEach(() => excludeDevices([]));
+
+    it('should match an entry by its own serial number or by the one of its station', () => {
+        excludeDevices(['T8113N1234', 'T8030P0000']);
+        expect(isExcludedEntry({ device_sn: 'T8113N1234', station_sn: 'T8113N1234' }), 'standalone').to.equal(true);
+        expect(isExcludedEntry({ device_sn: 'T8114N9999', station_sn: 'T8030P0000' }), 'on a HomeBase').to.equal(true);
+        expect(isExcludedEntry({ station_sn: 'T8030P0000' }), 'the HomeBase itself').to.equal(true);
+        expect(isExcludedEntry({ device_sn: 'T8210P5678', station_sn: 'T8010P1111' })).to.equal(false);
+    });
+
+    it('should exclude nothing without a list', () => {
+        expect(isExcludedEntry({ device_sn: 'T8113N1234', station_sn: 'T8113N1234' })).to.equal(false);
+    });
+
+    it('should replace the list instead of adding to it', () => {
+        excludeDevices(['T8113N1234']);
+        excludeDevices(['T8210P5678']);
+        expect(isExcludedEntry({ device_sn: 'T8113N1234' })).to.equal(false);
+        expect(isExcludedEntry({ device_sn: 'T8210P5678' })).to.equal(true);
+    });
+
+    it('should not trip over malformed entries', () => {
+        excludeDevices(['T8113N1234']);
+        for (const entry of [undefined, null, '', 'T8113N1234', 42, [], {}, { device_sn: 42 }, { station_sn: null }]) {
+            expect(isExcludedEntry(entry), JSON.stringify(entry)).to.equal(false);
+        }
     });
 });
 
@@ -191,13 +223,16 @@ describe('eufyApiCompat => applyEufyApiCompatibility', () => {
         };
         HTTPApi.prototype.getDeviceList = function (): Promise<DeviceListResponse[]> {
             return Promise.resolve([
-                { device_sn: 'T8170', device_type: 10031, params: [] },
-                { device_sn: 'T8000', device_type: 1, params: [] },
-                { device_sn: 'C37SERIAL', device_type: 10037, params: [] },
+                { device_sn: 'T8170', station_sn: 'T8170', device_type: 10031, params: [] },
+                { device_sn: 'T8000', station_sn: 'T8030', device_type: 1, params: [] },
+                { device_sn: 'C37SERIAL', station_sn: 'T8030', device_type: 10037, params: [] },
             ] as unknown as DeviceListResponse[]);
         };
         HTTPApi.prototype.getStationList = function (): Promise<StationListResponse[]> {
-            return Promise.resolve([{ device_type: 10031 }] as StationListResponse[]);
+            return Promise.resolve([
+                { station_sn: 'T8170', device_type: 10031 },
+                { station_sn: 'T8030', device_type: 18 },
+            ] as StationListResponse[]);
         };
         // Stands in for the library: a station list entry with a battery makes it an energy saving device.
         P2PClientProtocol.prototype.updateRawStation = function (value: StationListResponse): void {
@@ -260,7 +295,7 @@ describe('eufyApiCompat => applyEufyApiCompatibility', () => {
 
     it('should substitute unknown device types in the device and the station list', async () => {
         expect((await api.getDeviceList()).map(device => device.device_type)).to.deep.equal([60, 1, 89]);
-        expect((await api.getStationList()).map(station => station.device_type)).to.deep.equal([60]);
+        expect((await api.getStationList()).map(station => station.device_type)).to.deep.equal([60, 18]);
         await api.getDeviceList();
         expect(messages.filter(message => message.includes('Device type 10031')).length, 'logged once').to.equal(1);
         expect(messages.filter(message => message.includes('Device type 10037')).length, 'logged once').to.equal(1);
@@ -307,6 +342,40 @@ describe('eufyApiCompat => applyEufyApiCompatibility', () => {
             device({ device_type: DeviceType.CAMERA_S4, device_model: 'T814X' }).getPropertiesMetadata();
             const s4 = device({ device_type: DeviceType.CAMERA_S4, device_model: 'T8172' });
             expect(s4.hasProperty(PropertyName.DeviceDualCamWatchViewMode)).to.equal(true);
+        });
+    });
+
+    describe('excluded devices', () => {
+        const serials = (list: { device_sn?: string; station_sn: string }[]): string[] =>
+            list.map(entry => entry.device_sn ?? entry.station_sn);
+        const excludedMessages = (serial: string): number =>
+            messages.filter(message => message.includes(`(${serial}) is excluded`)).length;
+
+        afterEach(() => excludeDevices([]));
+
+        it('should remove an excluded device and keep its station', async () => {
+            excludeDevices(['T8000']);
+            expect(serials(await api.getDeviceList())).to.deep.equal(['T8170', 'C37SERIAL']);
+            expect(serials(await api.getStationList())).to.deep.equal(['T8170', 'T8030']);
+            await api.getDeviceList();
+            expect(excludedMessages('T8000'), 'after every device list refresh').to.equal(1);
+        });
+
+        it('should remove an excluded station with every device connected to it', async () => {
+            excludeDevices(['T8030']);
+            expect(serials(await api.getDeviceList())).to.deep.equal(['T8170']);
+            expect(serials(await api.getStationList())).to.deep.equal(['T8170']);
+        });
+
+        it('should remove a standalone device from both lists', async () => {
+            excludeDevices(['T8170']);
+            expect(serials(await api.getDeviceList())).to.deep.equal(['T8000', 'C37SERIAL']);
+            expect(serials(await api.getStationList())).to.deep.equal(['T8030']);
+        });
+
+        it('should keep every device without a list', async () => {
+            expect(serials(await api.getDeviceList())).to.deep.equal(['T8170', 'T8000', 'C37SERIAL']);
+            expect(serials(await api.getStationList())).to.deep.equal(['T8170', 'T8030']);
         });
     });
 

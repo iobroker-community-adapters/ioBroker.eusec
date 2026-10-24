@@ -17,6 +17,7 @@ declare global {
             p2pConnectionType: string;
             acceptInvitations: boolean;
             keepConnectedStations: string[];
+            excludedDevices: string[];
             compatStreamDevices: string[];
             alarmSoundDuration: number;
             go2rtc_api_port: number;

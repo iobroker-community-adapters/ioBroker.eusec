@@ -17,6 +17,7 @@ See below for more configuration parameters.
   | Alarm sound duration (sec) | Time in seconds after the triggered alarm is silenced. |
   | P2P connection type | Choose which P2P connection you prefer. |
   | Accept incoming invitations | Share invitation are automatically accepted if enabled. |
+  | Excluded devices | Serial numbers of devices and stations this instance ignores. It creates no states for them, processes none of their events, downloads none of their pictures and does not connect to them. Excluding a HomeBase excludes every device connected to it; a standalone device is its own station. States of a device that is excluded later are deleted on the next start. Useful when two ioBroker installations share one Eufy account, for example one at home and one in a motorhome on mobile data. A separate Eufy account per installation, shared only the devices it needs, has the same effect. |
 
 ### Parmeter: P2P connection type
 

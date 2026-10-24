@@ -12,6 +12,8 @@
     "Accept incoming invitations": "Accept incoming invitations",
     "Battery devices that stay connected": "Battery devices that stay connected",
     "Serial numbers of standalone battery devices on permanent power (power supply or solar panel). Their P2P connection is not closed after 30 seconds. Drains the battery of a device that is not on permanent power.": "Serial numbers of standalone battery devices on permanent power (power supply or solar panel). Their P2P connection is not closed after 30 seconds. Drains the battery of a device that is not on permanent power.",
+    "Excluded devices": "Excluded devices",
+    "Serial numbers of devices and stations this instance ignores: no states, no events, no pictures, no connection. Excluding a HomeBase excludes every device connected to it. The states of an excluded device are deleted.": "Serial numbers of devices and stations this instance ignores: no states, no events, no pictures, no connection. Excluding a HomeBase excludes every device connected to it. The states of an excluded device are deleted.",
     "Alarm sound duration (sec)": "Alarm sound duration (sec)",
     "Livestream settings": "Livestream settings",
     "Max camera livestream duration (sec)": "Max camera livestream duration (sec; 0 = unlimited)",

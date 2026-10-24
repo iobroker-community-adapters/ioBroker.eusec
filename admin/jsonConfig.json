@@ -1136,6 +1136,17 @@
                     "md": 12,
                     "lg": 6,
                     "xl": 6
+                },
+                "excludedDevices": {
+                    "newLine": true,
+                    "type": "chips",
+                    "label": "Excluded devices",
+                    "help": "Serial numbers of devices and stations this instance ignores: no states, no events, no pictures, no connection. Excluding a HomeBase excludes every device connected to it. The states of an excluded device are deleted.",
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 12,
+                    "lg": 6,
+                    "xl": 6
                 }
             }
         },

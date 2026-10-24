@@ -12,6 +12,8 @@
     "Accept incoming invitations": "接受收到的邀请",
     "Battery devices that stay connected": "保持连接的电池设备",
     "Serial numbers of standalone battery devices on permanent power (power supply or solar panel). Their P2P connection is not closed after 30 seconds. Drains the battery of a device that is not on permanent power.": "使用常供电（电源适配器或太阳能板）的独立电池设备的序列号。其 P2P 连接不会在 30 秒后断开。对未常供电的设备会耗尽电池。",
+    "Excluded devices": "排除的设备",
+    "Serial numbers of devices and stations this instance ignores: no states, no events, no pictures, no connection. Excluding a HomeBase excludes every device connected to it. The states of an excluded device are deleted.": "此实例忽略的设备和基站的序列号：不创建状态、不处理事件、不下载图片、不建立连接。排除 HomeBase 会同时排除与其连接的所有设备。被排除设备的状态将被删除。",
     "Alarm sound duration (sec)": "警报声持续时间（秒",
     "Livestream settings": "直播设置",
     "Max camera livestream duration (sec)": "相机直播的最大持续时间（秒；0 = 无限）",

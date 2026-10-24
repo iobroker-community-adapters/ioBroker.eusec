@@ -14,6 +14,7 @@
  * 5. Unknown device types: devices the library does not know get no states - see applyEufyApiCompatibility().
  * 6. Kept P2P connection: battery devices on permanent power can opt out of the 30s disconnect - same.
  * 7. Floodlight Cam E30: defined like the Floodlight Cam E340, but its commands take another route - same.
+ * 8. Excluded devices: devices and stations the instance ignores, as configured - same.
  *
  * ## 1. Success code
  *
@@ -147,6 +148,24 @@
  * Known limit: only the livestream is confirmed on real cameras. Presets, talkback, calibration and
  * the light and detection settings now take the T8425 route as well, and so does pan and tilt, which
  * worked on the generic route before.
+ *
+ * ## 8. Excluded devices
+ *
+ * An instance gets every device and station of the account it logs in with. Two ioBroker
+ * installations that share an account, one of them on a mobile data connection, both fetch the
+ * events and pictures of every camera and connect to every station (forum topic 85382). The
+ * serial numbers in `excludedDevices` are removed from the device and the station list right after
+ * they are fetched, so the library never creates them: no states, no push events, no picture
+ * downloads, no P2P connection. A device whose station is excluded goes with it, so excluding a
+ * HomeBase excludes every device connected to it. A standalone device is its own station, so its
+ * serial number removes both entries. The adapter deletes the states of a device that is no longer
+ * in the lists on the next connect, as it does for one removed from the account.
+ *
+ * Known limit: a HomeBase that stays included still reports its excluded devices, for example their
+ * battery level, and the library logs an error for each such report since it does not know the device.
+ * Excluding the HomeBase as well, or not sharing the device with the account, avoids that.
+ *
+ * This is an option, not a correction; the library has no such filter.
  */
 
 import {
@@ -314,6 +333,35 @@ export const keepStationsConnected = (serials: string[]): void => {
     }
 };
 
+/** Serial numbers of the devices and stations the instance ignores - see section 8 above. */
+const excludedSerials = new Set<string>();
+
+/**
+ * Sets the devices and stations the instance ignores, replacing the previous list.
+ *
+ * @param serials Serial numbers as returned by parseSerialList()
+ */
+export const excludeDevices = (serials: string[]): void => {
+    excludedSerials.clear();
+    for (const serial of serials) {
+        excludedSerials.add(serial);
+    }
+};
+
+/**
+ * Whether an entry of the device or the station list belongs to an excluded device or station.
+ *
+ * @param entry An entry of the decrypted device or station list
+ * @returns true if its own serial number or the one of its station is excluded
+ */
+export const isExcludedEntry = (entry: unknown): boolean => {
+    if (entry === null || typeof entry !== 'object') {
+        return false;
+    }
+    const { device_sn, station_sn } = entry as { device_sn?: unknown; station_sn?: unknown };
+    return [device_sn, station_sn].some(serial => typeof serial === 'string' && excludedSerials.has(serial));
+};
+
 let patched = false;
 
 /**
@@ -398,8 +446,30 @@ export const applyEufyApiCompatibility = (log: (message: string) => void): void 
         }
     };
 
+    // 8. Leave out the excluded devices and stations, before anything else looks at them.
+    const reportedExclusions = new Set<string>();
+    const removeExcluded = <T>(list: T[]): T[] => {
+        if (!Array.isArray(list)) {
+            return list;
+        }
+        return list.filter(entry => {
+            if (!isExcludedEntry(entry)) {
+                return true;
+            }
+            const { device_sn, station_sn, device_name, station_name } = entry as Record<string, unknown>;
+            const serial = String(device_sn ?? station_sn);
+            if (!reportedExclusions.has(serial)) {
+                reportedExclusions.add(serial);
+                log(
+                    `${String(device_name ?? station_name)} (${serial}) is excluded in the instance settings: the adapter creates no states for it and does not connect to it.`,
+                );
+            }
+            return false;
+        });
+    };
+
     HTTPApi.prototype.getDeviceList = async function (): Promise<DeviceListResponse[]> {
-        const devices = await originalGetDeviceList.call(this);
+        const devices = removeExcluded(await originalGetDeviceList.call(this));
         const substituted = substituteDeviceTypes(devices);
         reportSubstitutes(substituted);
         for (const device of substituted) {
@@ -412,7 +482,7 @@ export const applyEufyApiCompatibility = (log: (message: string) => void): void 
     };
 
     HTTPApi.prototype.getStationList = async function (): Promise<StationListResponse[]> {
-        const stations = await originalGetStationList.call(this);
+        const stations = removeExcluded(await originalGetStationList.call(this));
         reportSubstitutes(substituteDeviceTypes(stations));
         return stations;
     };

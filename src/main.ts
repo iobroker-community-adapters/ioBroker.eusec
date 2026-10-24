@@ -61,6 +61,7 @@ import {
     applyEufyApiCompatibility,
     eufyClientOptions,
     keepStationsConnected,
+    excludeDevices,
     parseSerialList,
 } from './lib/eufyApiCompat';
 import {
@@ -366,6 +367,7 @@ export class euSec extends Adapter {
 
             // Must happen before initialize(), the first API call is made during login.
             keepStationsConnected(parseSerialList(this.config.keepConnectedStations));
+            excludeDevices(parseSerialList(this.config.excludedDevices));
             applyEufyApiCompatibility(message => this.logger.info(message));
 
             this.eufy = await EufySecurity.initialize(config, this.logger);
