@@ -74,11 +74,17 @@ export const go2rtcStreamName = (serial: string, compatSerials: string[]): strin
  * 2-4 s ahead of the copied audio and VLC dropped all sound. Known limit: `-fps_mode` needs
  * ffmpeg 5.1 or newer; ffmpeg-for-homebridge ships 8.0, only a system ffmpeg fallback can be older.
  *
+ * `timeout=30` lets ffmpeg wait for the camera. go2rtc answers ffmpeg's request for the device
+ * stream only once the first picture arrived, and its default of 5 seconds failed every on-demand
+ * start of a camera that takes longer. Known limit: go2rtc gives up an ffmpeg that has not
+ * delivered after 30 seconds ("[exec] timeout"), and an `ffmpeg:` source cannot change that - a
+ * camera that takes longer only works once its livestream runs.
+ *
  * @param serial Serial of the device
  * @returns The source string for the go2rtc configuration
  */
 export const compatStreamSource = (serial: string): string =>
-    `ffmpeg:${serial}#video=h264#width=-2#height=720#audio=copy#raw=-fps_mode passthrough`;
+    `ffmpeg:${serial}#video=h264#width=-2#height=720#audio=copy#timeout=30#raw=-fps_mode passthrough`;
 
 /**
  * Builds the URL of the livestream player page. The page is served by go2rtc itself, because

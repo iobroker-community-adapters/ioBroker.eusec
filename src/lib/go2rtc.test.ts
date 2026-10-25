@@ -66,6 +66,14 @@ describe('go2rtc => go2rtcStreamName', () => {
         expect(compatStreamSource('T84A1P00')).to.include('#raw=-fps_mode passthrough');
     });
 
+    it('should let ffmpeg wait for a camera that takes longer than 5 seconds to start', () => {
+        // go2rtc answers ffmpeg only with the first picture; its default timeout is 5 seconds, and
+        // go2rtc itself gives up an ffmpeg after 30 seconds - more than that cannot help.
+        const source = compatStreamSource('T84A1P00');
+        expect(source).to.include('#timeout=30');
+        expect(source.match(/#timeout=/g)).to.have.length(1);
+    });
+
     it('should fix only the height of the compatibility stream, so the aspect ratio is kept', () => {
         // go2rtc makes "scale=<width>:<height>" of these; 1280x720 stretched 4:3 cameras to 16:9.
         const source = compatStreamSource('T84A1P00');
