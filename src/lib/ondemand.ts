@@ -29,6 +29,12 @@ export interface OnDemandHooks {
     group?: (serial: string) => string | undefined;
     /** Name of a device for messages a viewer sees. */
     name?: (serial: string) => string | undefined;
+    /**
+     * Timers of the adapter, which js-controller clears on unload. The global ones by default, so
+     * this module runs without an adapter.
+     */
+    setTimeout?: (callback: () => void, ms: number) => unknown;
+    clearTimeout?: (timer: unknown) => void;
     log: {
         debug: (message: string) => void;
         info: (message: string) => void;
@@ -120,7 +126,7 @@ export const unreachableReason = (name: string): string => `Camera not reachable
 
 interface Sink {
     response: http.ServerResponse;
-    timeout: NodeJS.Timeout;
+    timeout: unknown;
     /** Whether the data already starts at a point go2rtc can begin with. */
     aligned: boolean;
     /** go2rtc does not keep up reading - data is dropped until the response drained. */
@@ -175,7 +181,7 @@ interface Live {
     /** No audio arrived within audioTimeout - audio requests are answered right away. */
     mute: boolean;
     h265: boolean;
-    audioTimer?: NodeJS.Timeout;
+    audioTimer?: unknown;
 }
 
 interface Session {
@@ -203,7 +209,7 @@ interface Session {
     startedAt?: number;
     /** All start attempts failed - the device is not started again before this time. */
     unreachableUntil?: number;
-    stopTimer?: NodeJS.Timeout;
+    stopTimer?: unknown;
 }
 
 /**
@@ -235,6 +241,8 @@ export class OnDemandStreams {
     private readonly server: http.Server;
     private readonly sessions = new Map<string, Session>();
     private readonly options: OnDemandOptions;
+    private readonly setTimer: (callback: () => void, ms: number) => unknown;
+    private readonly clearTimer: (timer: unknown) => void;
     private port = 0;
 
     public constructor(
@@ -242,6 +250,8 @@ export class OnDemandStreams {
         options: Partial<OnDemandOptions> = {},
     ) {
         this.options = { ...DEFAULT_OPTIONS, ...options };
+        this.setTimer = hooks.setTimeout ?? setTimeout;
+        this.clearTimer = hooks.clearTimeout ?? (timer => clearTimeout(timer as NodeJS.Timeout | undefined));
         this.server = http.createServer((request, response) => this.onRequest(request, response));
         // A livestream request stays open as long as the camera streams.
         this.server.requestTimeout = 0;
@@ -316,7 +326,7 @@ export class OnDemandStreams {
                 this.hooks.log.info(
                     `On-demand stream ${serial}: first picture${waited}, ${session.sinks.video.size} video request(s) of go2rtc waiting`,
                 );
-                live.audioTimer = setTimeout(() => {
+                live.audioTimer = this.setTimer(() => {
                     if (!live.audioSeen && session.live === live) {
                         live.mute = true;
                         this.hooks.log.info(
@@ -472,7 +482,7 @@ export class OnDemandStreams {
             response,
             aligned: false,
             congested: false,
-            timeout: setTimeout(() => {
+            timeout: this.setTimer(() => {
                 this.hooks.log.warn(
                     `On-demand stream ${serial}: the camera delivered no ${track} within ${this.options.firstDataTimeout / 1000} seconds`,
                 );
@@ -569,7 +579,7 @@ export class OnDemandStreams {
                 sink.aligned = true;
             }
             if (!sink.response.headersSent) {
-                clearTimeout(sink.timeout);
+                this.clearTimer(sink.timeout);
                 // go2rtc detects the format from the data itself.
                 sink.response.writeHead(200, { 'Content-Type': 'application/octet-stream' });
             }
@@ -598,7 +608,7 @@ export class OnDemandStreams {
             return;
         }
         this.clearStopTimer(session);
-        session.stopTimer = setTimeout(
+        session.stopTimer = this.setTimer(
             () => {
                 session.stopTimer = undefined;
                 // A start that never delivered is stopped as well - otherwise the camera stays busy
@@ -658,7 +668,7 @@ export class OnDemandStreams {
     }
 
     private removeSink(session: Session, track: OnDemandTrack, sink: Sink): boolean {
-        clearTimeout(sink.timeout);
+        this.clearTimer(sink.timeout);
         return session.sinks[track].delete(sink);
     }
 
@@ -678,7 +688,7 @@ export class OnDemandStreams {
         if (!live) {
             return;
         }
-        clearTimeout(live.audioTimer);
+        this.clearTimer(live.audioTimer);
         live.video.removeAllListeners('data');
         live.audio.removeAllListeners('data');
         live.videoFilter.removeAllListeners('data');
@@ -690,7 +700,7 @@ export class OnDemandStreams {
 
     private clearStopTimer(session: Session): void {
         if (session.stopTimer) {
-            clearTimeout(session.stopTimer);
+            this.clearTimer(session.stopTimer);
             session.stopTimer = undefined;
         }
     }

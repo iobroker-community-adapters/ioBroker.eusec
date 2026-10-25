@@ -231,6 +231,35 @@ describe('ondemand => OnDemandStreams', () => {
         expect(started).to.deep.equal(['CAM1', 'CAM1']);
     });
 
+    it('should schedule and clear its timers through the hooks', async () => {
+        const scheduled: number[] = [];
+        let cleared = 0;
+        const streams = new OnDemandStreams(
+            {
+                start: () => new Promise<void>(() => {}),
+                stop: () => Promise.resolve(),
+                setTimeout: (callback, ms) => {
+                    scheduled.push(ms);
+                    return setTimeout(callback, ms);
+                },
+                clearTimeout: timer => {
+                    cleared++;
+                    clearTimeout(timer as NodeJS.Timeout);
+                },
+                log: silent,
+            },
+            { firstDataTimeout: 100 },
+        );
+        await streams.listen();
+        try {
+            expect((await pull(streams.sources('CAM1')[0]).response).statusCode).to.equal(504);
+            expect(scheduled).to.deep.equal([100]);
+            expect(cleared).to.be.greaterThan(0);
+        } finally {
+            await streams.close();
+        }
+    });
+
     it('should not start a second time while a start still runs, also after a 504', async () => {
         let finish!: () => void;
         const starts: string[] = [];

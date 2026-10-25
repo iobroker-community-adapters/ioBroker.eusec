@@ -488,6 +488,8 @@ export class euSec extends Adapter {
                         // second device of the station ends the first one.
                         group: serial => stations.get(serial),
                         name: serial => names.get(serial),
+                        setTimeout: (callback, ms) => this.setTimeout(callback, ms),
+                        clearTimeout: timer => this.clearTimeout(timer as ioBroker.Timeout | undefined),
                         log: {
                             debug: message => this.logger.debug(message),
                             info: message => this.logger.info(message),
