@@ -205,6 +205,42 @@ describe('ondemand => OnDemandStreams', () => {
         expect(started).to.deep.equal(['CAM1', 'CAM1']);
     });
 
+    it('should start again for a request that joined a livestream which stopped before it delivered', async () => {
+        await create({ idleStopDelay: 100 });
+        const first = pull(streams.sources('CAM1')[0]);
+        await wait(50);
+        const cameraVideo = new stream.PassThrough();
+        streams.attach('CAM1', cameraVideo, new stream.PassThrough());
+        cameraVideo.write(keyframe('frame'));
+        await first.response;
+        await wait(50);
+        first.request.destroy();
+        await wait(200);
+        // The stop is asked for, the camera still streams until the library reports the end.
+        expect(stopped).to.deep.equal(['CAM1']);
+
+        const second = pull(streams.sources('CAM1')[0]);
+        await wait(50);
+        streams.detach('CAM1');
+        await wait(50);
+        expect(started).to.deep.equal(['CAM1', 'CAM1']);
+        const nextVideo = new stream.PassThrough();
+        streams.attach('CAM1', nextVideo, new stream.PassThrough());
+        nextVideo.write(keyframe('next'));
+        expect((await second.response).statusCode).to.equal(200);
+        second.request.destroy();
+    });
+
+    it('should not start again when a livestream stops that nobody waits for', async () => {
+        await create();
+        const cameraVideo = new stream.PassThrough();
+        streams.attach('CAM1', cameraVideo, new stream.PassThrough());
+        streams.detach('CAM1');
+        streams.detach('UNKNOWN');
+        await wait(50);
+        expect(started).to.deep.equal([]);
+    });
+
     it('should give up on audio of a mute camera, so the video is not held back', async () => {
         await create();
         const [videoUrl, audioUrl] = streams.sources('CAM1');

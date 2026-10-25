@@ -421,6 +421,11 @@ export class OnDemandStreams {
             }
         }
         this.clearStopTimer(session);
+        // A request that came after the idle stop was asked for joined the livestream that was
+        // ending. Without a start it would wait until firstDataTimeout.
+        if (!session.start && this.sinkCount(session) > 0) {
+            this.start(serial, session, 'stopped before it delivered to a waiting request of go2rtc');
+        }
     }
 
     public async close(): Promise<void> {
@@ -511,23 +516,27 @@ export class OnDemandStreams {
             `On-demand stream ${serial}: go2rtc requests the ${track}${session.live ? ' of the running livestream' : ''}`,
         );
         if (!session.live && !session.start) {
-            session.starting = true;
-            session.requestedAt = Date.now();
-            session.startedAt = session.requestedAt;
-            this.hooks.log.info(`On-demand stream ${serial}: requested by go2rtc - starting livestream`);
-            const start: Promise<void> = this.hooks
-                .start(serial)
-                .catch(error => {
-                    session.starting = false;
-                    this.hooks.log.warn(`On-demand stream ${serial}: livestream could not be started: ${error}`);
-                })
-                .finally(() => {
-                    if (session.start === start) {
-                        session.start = undefined;
-                    }
-                });
-            session.start = start;
+            this.start(serial, session, 'requested by go2rtc');
         }
+    }
+
+    private start(serial: string, session: Session, reason: string): void {
+        session.starting = true;
+        session.requestedAt = Date.now();
+        session.startedAt = session.requestedAt;
+        this.hooks.log.info(`On-demand stream ${serial}: ${reason} - starting livestream`);
+        const start: Promise<void> = this.hooks
+            .start(serial)
+            .catch(error => {
+                session.starting = false;
+                this.hooks.log.warn(`On-demand stream ${serial}: livestream could not be started: ${error}`);
+            })
+            .finally(() => {
+                if (session.start === start) {
+                    session.start = undefined;
+                }
+            });
+        session.start = start;
     }
 
     /**

@@ -59,6 +59,9 @@ A detailed description (in German) is available at our forum (https://forum.iobr
 	Placeholder for the next version (at the beginning of the line):
 	### **WORK IN PROGRESS**
 -->
+### **WORK IN PROGRESS**
+- (typhosj) On-demand streams no longer hang for five minutes when a player opens the stream again shortly after the last one left. A request that came while the idle livestream was being stopped waited for a livestream nobody started; a compatibility stream then failed in VLC with "404 Not Found" or "[exec] timeout" (reported in the forum)
+
 ### 3.6.0 (2026-10-25)
 - (typhosj) eufyCam C37 (T814X): the states `dualCamWatchViewMode` and `enabled` are no longer created and are removed from existing installations. The C37 has one lens and does not report whether it is enabled, so `enabled` always showed `true` (#198)
 - (typhosj) Compatibility streams no longer stop answering for good after a viewer left. The bundled go2rtc 1.9.4 could lock up a transcoded stream when it ended it, and only a restart of the adapter helped. The adapter now downloads go2rtc 1.9.14 from its GitHub release once, checks it against the published checksum and keeps it in the data directory of the instance. Without access to GitHub it falls back to go2rtc 1.9.4 and logs a warning
