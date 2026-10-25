@@ -59,7 +59,7 @@ A detailed description (in German) is available at our forum (https://forum.iobr
 	Placeholder for the next version (at the beginning of the line):
 	### **WORK IN PROGRESS**
 -->
-### **WORK IN PROGRESS**
+### 3.6.0 (2026-10-25)
 - (typhosj) eufyCam C37 (T814X): the states `dualCamWatchViewMode` and `enabled` are no longer created and are removed from existing installations. The C37 has one lens and does not report whether it is enabled, so `enabled` always showed `true` (#198)
 - (typhosj) Compatibility streams no longer stop answering for good after a viewer left. The bundled go2rtc 1.9.4 could lock up a transcoded stream when it ended it, and only a restart of the adapter helped. The adapter now downloads go2rtc 1.9.14 from its GitHub release once, checks it against the published checksum and keeps it in the data directory of the instance. Without access to GitHub it falls back to go2rtc 1.9.4 and logs a warning
 - (typhosj) The setting "Livestream quality" now also applies to cameras that name their qualities by resolution, such as the SoloCam S340 or the Indoor Cam S350. Low, medium and high stand for the lowest, the second and the third resolution, for example 720P, 1080P and 3K. Until now these cameras stayed at "Auto", where they change the resolution while the livestream runs and the player shows a green or black picture. The SoloCam S340 raises its resolution at the start of every livestream even at a fixed quality; for it, a compatibility stream keeps the resolution steady (reported in the forum)
@@ -84,25 +84,6 @@ A detailed description (in German) is available at our forum (https://forum.iobr
 - (hdering) New setting "Wait for camera data (sec)", 15 seconds by default: a livestream is no longer given up after 5 seconds without data. Battery cameras that first have to wake up often need longer, and their livestream then ended with "we haven't received any data for 5 seconds" before the first frame
 - (hdering) The maximum livestream duration counts from the first picture instead of from the start command, so a camera that needs a minute to wake up no longer loses that minute of its livestream
 - (hdering) Livestream: the audio track (or, with a slow camera, the whole stream) no longer breaks after 5 seconds with `socket hang up`. go2rtc drops connections whose request header does not arrive within 5 seconds, and the adapter only sent it with the first data. A livestream that already ended is no longer stopped a second time, which logged a misleading warning
-
-### 3.3.0 (2026-09-21)
-- (typhosj) **Breaking:** the tilt down button of pan and tilt cameras is renamed from `titl_down` to `tilt_down`. The update moves the existing object with its name and custom settings (e.g. history); scripts and visualizations that use the old id have to be changed to `tilt_down`
-- (typhosj) New setting "Devices with a compatibility stream": the livestream of a camera listed there is re-encoded to 720p H.264, keeping the aspect ratio of the camera, before it reaches the player, which makes it playable on old WebViews, kiosk tablets and hardware decoders that cannot handle the resolution the camera sends. The states `livestream` and `livestream_rtsp` of that camera point at the transcoded stream, the untouched one stays available under the serial number. Transcoding costs CPU on the ioBroker host while such a stream is watched, which is why it is off by default and set per device (#153)
-- (typhosj) Talkback: devices with a speaker get the state `talkback_play`. Writing an http(s) URL or an absolute file path to it plays that audio through the device; a livestream is started for it if none is running and stopped again afterwards (#34)
-- (typhosj) New setting "Battery devices that stay connected": standalone battery devices on permanent power (power supply or solar panel) listed there keep their P2P connection instead of losing it 30 seconds after the last command, and are reconnected when it drops. It drains the battery of a device that is not on permanent power (#33)
-- (typhosj) The eufyCam C31 (T817L) is no longer an unknown device without states; the adapter handles it like the SoloCam Spotlight 1080, which gives it livestream, motion and person detection, light and alarm. Pan and tilt are not available yet (#156)
-- (typhosj) Installing the adapter now removes only `--security-revert=CVE-2023-46809` from the node process parameters of an instance instead of clearing them all, so parameters such as `--max-old-space-size` survive an update. A failure there no longer aborts the installation
-- (typhosj) Event pictures that arrive in a format the adapter cannot decrypt (e.g. `v8_eufysecurity`) are now loaded from the HomeBase over P2P instead, the way the picture is loaded when the adapter starts. The picture appears about a minute after the event, once the station has stored it (#136)
-- (typhosj) Livestreams no longer fail with "RSA_PKCS1_PADDING is no longer supported for private decryption" on node.js builds that refuse RSA PKCS#1 v1.5 decryption; the stream key is now decrypted by node-rsa's own implementation (#144)
-- (typhosj) Error messages in the log show the actual error again; before, an error passed along with a log line was written as `{}`, and an error with circular references could not be logged at all
-- (typhosj) A device or station property whose state had no value yet now receives its updates; before, such a state stayed empty until the adapter was restarted
-- (typhosj) The adapter no longer rewrites the object of every property state on each start, only the ones whose definition actually changed
-- (typhosj) A station that disconnects no longer causes warnings about missing `livestream` states for sensors, locks and other devices without a livestream
-- (typhosj) The `chime` message command now always answers exactly once: with an error if parameters are missing (before: no answer at all) and only with "not supported" for a station without chime (before: also "chime command sent")
-- (typhosj) The state `set_privacy_angle` is named "Set Privacy Angle" instead of "Set Default Angle"; existing objects are renamed on update unless their name was changed by hand
-- (typhosj) A channel named "unknown" is no longer deleted on start while it still holds states that have no value yet; only channels without any object below them are removed
-- (typhosj) Update migrations compare adapter versions correctly beyond x.9 (3.10.0 was treated as older than 3.9.0)
-- (typhosj) Removed unused code and the no longer needed dependencies `@bropat/fluent-ffmpeg` and `fs-extra`
 
 [Older changelogs can be found there](CHANGELOG_OLD.md)
 
