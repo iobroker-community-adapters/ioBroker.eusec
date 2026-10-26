@@ -487,6 +487,7 @@ export class euSec extends Adapter {
                         // One P2P session per station carries a single livestream: starting a
                         // second device of the station ends the first one.
                         group: serial => stations.get(serial),
+                        inUse: serial => this.talkbacks.has(serial),
                         name: serial => names.get(serial),
                         setTimeout: (callback, ms) => this.setTimeout(callback, ms),
                         clearTimeout: timer => this.clearTimeout(timer as ioBroker.Timeout | undefined),
@@ -1607,6 +1608,9 @@ export class euSec extends Adapter {
                     if (!(await this.enforceVideoStreamingQuality(device))) {
                         this.hintVideoStreamingQuality(device);
                     }
+                    // The library would end the livestream of another device of the station only
+                    // on its own side, and the station would not send the new one.
+                    await this.onDemand?.handOver(device_sn);
                     this.logger.info(`Starting the livestream of device ${device_sn}`);
                     await this.eufy.startStationLivestream(device_sn);
                 } else {

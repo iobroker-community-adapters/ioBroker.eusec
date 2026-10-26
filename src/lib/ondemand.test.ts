@@ -606,7 +606,6 @@ describe('ondemand => OnDemandStreams', () => {
         pull(streams.sources('CAM2')[0]);
         await wait(50);
         expect(started).to.deep.equal(['CAM1', 'CAM2']);
-        expect(stopped).to.deep.equal(['CAM1']);
     });
 
     it('should stop the idle livestream of another device of the station before starting', async () => {
@@ -614,7 +613,9 @@ describe('ondemand => OnDemandStreams', () => {
         let finishStop!: () => void;
         const streams: OnDemandStreams = new OnDemandStreams(
             {
-                start: serial => {
+                // Like startLivestream() of the adapter.
+                start: async serial => {
+                    await streams.handOver(serial);
                     order.push(`start ${serial}`);
                     return untilDelivered(() => streams)(serial);
                 },
@@ -658,34 +659,98 @@ describe('ondemand => OnDemandStreams', () => {
         }
     });
 
-    it('should start even when stopping the idle livestream of the station fails', async () => {
-        const started: string[] = [];
+    it('should stop a livestream of the station nobody watches, also one started through start_stream', async () => {
+        await create({}, serial => (serial === 'CAM3' ? 'OTHER' : 'STATION'));
+        // start_stream: the livestream arrives without any request of go2rtc.
+        streams.attach('CAM1', new stream.PassThrough(), new stream.PassThrough());
+        streams.attach('CAM3', new stream.PassThrough(), new stream.PassThrough());
+        // Watched - stationBusyWith() refuses the start before it comes to a hand-over.
+        const watched = pull(streams.sources('CAM4')[0]);
+        await wait(50);
+        streams.attach('CAM4', new stream.PassThrough(), new stream.PassThrough());
+        await streams.handOver('CAM2');
+        expect(stopped).to.deep.equal(['CAM1']);
+        // Once the library reported the stop, the next start attempt finds nothing to hand over.
+        streams.detach('CAM1');
+        await streams.handOver('CAM2');
+        expect(stopped).to.deep.equal(['CAM1']);
+        watched.request.destroy();
+    });
+
+    it('should keep the station busy while the adapter uses a livestream of it', async () => {
+        let talking = true;
+        const stopped: string[] = [];
         const streams: OnDemandStreams = new OnDemandStreams(
             {
-                start: serial => {
-                    started.push(serial);
-                    return untilDelivered(() => streams)(serial);
-                },
-                stop: () => Promise.reject(new Error('station not connected')),
+                start: untilDelivered(() => streams),
+                stop: serial => Promise.resolve(void stopped.push(serial)),
                 group: () => 'STATION',
+                inUse: serial => serial === 'CAM1' && talking,
                 log: silent,
             },
             { idleStopDelay: 300, firstDataTimeout: 1500, audioTimeout: 100 },
         );
         await streams.listen();
         try {
-            const first = pull(streams.sources('CAM1')[0]);
-            await wait(50);
             streams.attach('CAM1', new stream.PassThrough(), new stream.PassThrough());
-            first.request.destroy();
-            await wait(50);
-            const second = pull(streams.sources('CAM2')[0]);
-            await wait(50);
-            expect(started).to.deep.equal(['CAM1', 'CAM2']);
-            second.request.destroy();
+            expect(streams.stationBusyWith('CAM2')).to.equal('CAM1');
+            const refused = await pull(streams.sources('CAM2')[0]).response;
+            expect(refused.statusCode).to.equal(503);
+            expect(refused.statusMessage).to.equal('Station busy - CAM1 is streaming');
+            await streams.handOver('CAM2');
+            expect(stopped).to.deep.equal([]);
+
+            // The talkback ended.
+            talking = false;
+            expect(streams.stationBusyWith('CAM2')).to.equal(undefined);
+            await streams.handOver('CAM2');
+            expect(stopped).to.deep.equal(['CAM1']);
         } finally {
             await streams.close();
         }
+    });
+
+    it('should hand over even when stopping the livestream of the station fails', async () => {
+        const warnings: string[] = [];
+        const streams: OnDemandStreams = new OnDemandStreams(
+            {
+                start: untilDelivered(() => streams),
+                stop: () => Promise.reject(new Error('station not connected')),
+                group: () => 'STATION',
+                log: { ...silent, warn: message => void warnings.push(message) },
+            },
+            { idleStopDelay: 300, firstDataTimeout: 1500, audioTimeout: 100 },
+        );
+        await streams.listen();
+        try {
+            streams.attach('CAM1', new stream.PassThrough(), new stream.PassThrough());
+            await streams.handOver('CAM2');
+            expect(warnings).to.deep.equal([
+                'On-demand stream CAM1: livestream could not be stopped: Error: station not connected',
+            ]);
+        } finally {
+            await streams.close();
+        }
+    });
+
+    it('should refuse a request that joined a livestream the station hands over', async () => {
+        await create({}, () => 'STATION');
+        const first = pull(streams.sources('CAM1')[0]);
+        await wait(50);
+        streams.attach('CAM1', new stream.PassThrough(), new stream.PassThrough());
+        first.request.destroy();
+        await wait(50);
+        const second = pull(streams.sources('CAM2')[0]);
+        await wait(50);
+        // Comes after the stop of CAM1 was sent, before the library reported it.
+        const back = pull(streams.sources('CAM1')[0]);
+        await wait(50);
+        streams.detach('CAM1');
+        const answer = await back.response;
+        expect(answer.statusCode).to.equal(503);
+        expect(answer.statusMessage).to.equal('Station busy - CAM2 is streaming');
+        expect(started).to.deep.equal(['CAM1', 'CAM2']);
+        second.request.destroy();
     });
 
     it('should stop a start that never delivered once nobody waits for it anymore', async () => {

@@ -27,6 +27,11 @@ export interface OnDemandHooks {
      * through, which carries only one livestream at a time.
      */
     group?: (serial: string) => string | undefined;
+    /**
+     * Whether the adapter itself uses the livestream of the device, e.g. for a talkback. Such a
+     * livestream keeps the station busy like a watched one, from its first picture on.
+     */
+    inUse?: (serial: string) => boolean;
     /** Name of a device for messages a viewer sees. */
     name?: (serial: string) => string | undefined;
     /**
@@ -424,6 +429,15 @@ export class OnDemandStreams {
         // A request still waits - e.g. one that joined the livestream after the idle stop was asked
         // for, or whose station dropped. Without a start it would wait until firstDataTimeout.
         if (!session.start && this.sinkCount(session) > 0) {
+            // The livestream ended because another device of the station took it over - the start
+            // would be refused, and the request would wait until firstDataTimeout all the same.
+            const busy = this.stationBusyWith(serial);
+            if (busy) {
+                const reason = this.refuse(serial, session, busy);
+                this.endSinks(session, 'video', 503, reason);
+                this.endSinks(session, 'audio', 503, reason);
+                return;
+            }
             this.start(serial, session, 'livestream ended while a request of go2rtc still waits');
         }
     }
@@ -467,16 +481,7 @@ export class OnDemandStreams {
             // device of the same station. go2rtc asks again later.
             const busy = this.stationBusyWith(serial);
             if (busy) {
-                // go2rtc asks again every few seconds, for video and audio - say it once.
-                const message = `On-demand stream ${serial}: the station is busy with the livestream of ${busy} - not started`;
-                if (session.refusedFor === busy) {
-                    this.hooks.log.debug(message);
-                } else {
-                    this.hooks.log.info(message);
-                    session.refusedFor = busy;
-                }
-                session.refusedAt = Date.now();
-                response.writeHead(503, busyReason(this.hooks.name?.(busy) ?? busy)).end();
+                response.writeHead(503, this.refuse(serial, session, busy)).end();
                 return;
             }
             session.refusedFor = undefined;
@@ -525,8 +530,8 @@ export class OnDemandStreams {
         session.requestedAt = Date.now();
         session.startedAt = session.requestedAt;
         this.hooks.log.info(`On-demand stream ${serial}: ${reason} - starting livestream`);
-        const start: Promise<void> = Promise.all(this.handOver(serial))
-            .then(() => this.hooks.start(serial))
+        const start: Promise<void> = this.hooks
+            .start(serial)
             .catch(error => {
                 session.starting = false;
                 this.hooks.log.warn(`On-demand stream ${serial}: livestream could not be started: ${error}`);
@@ -540,32 +545,55 @@ export class OnDemandStreams {
     }
 
     /**
-     * Stops the livestreams of the other devices of the group that nobody watches anymore and that
-     * wait for their idle stop. Starting a device while one of them still runs makes the library end
-     * that livestream only on its own side - the station is never sent the stop, and the new
-     * livestream does not arrive.
+     * Stops the livestreams of the other devices of the group that nobody watches or uses - one
+     * waiting for its idle stop, or one started through start_stream. Starting a device while one of
+     * them still runs makes the library end that livestream only on its own side - the station is
+     * never sent the stop, and the new livestream does not arrive. Call it for every start, after
+     * stationBusyWith() let the device through.
      *
      * @param serial Serial of the device that starts
-     * @returns The stops, the start waits for them
+     * @returns Settles once the stops were sent, also when one of them failed
      */
-    private handOver(serial: string): Promise<void>[] {
+    public async handOver(serial: string): Promise<void> {
         const group = this.hooks.group?.(serial);
         if (group === undefined) {
-            return [];
+            return;
         }
         const stops: Promise<void>[] = [];
         for (const [other, session] of this.sessions) {
             if (
                 other !== serial &&
-                session.stopTimer !== undefined &&
                 (session.live || session.starting) &&
+                this.sinkCount(session) === 0 &&
+                !this.hooks.inUse?.(other) &&
                 this.hooks.group?.(other) === group
             ) {
                 this.clearStopTimer(session);
                 stops.push(this.stop(other, session, `${serial} takes over the station`));
             }
         }
-        return stops;
+        await Promise.all(stops);
+    }
+
+    /**
+     * Logs that a request is refused because the station is busy, once per busy device - go2rtc
+     * asks again every few seconds, for video and audio.
+     *
+     * @param serial Serial of the device that is requested
+     * @param session Its session
+     * @param busy Serial of the device whose livestream occupies the station
+     * @returns The reason phrase of the answer
+     */
+    private refuse(serial: string, session: Session, busy: string): string {
+        const message = `On-demand stream ${serial}: the station is busy with the livestream of ${busy} - not started`;
+        if (session.refusedFor === busy) {
+            this.hooks.log.debug(message);
+        } else {
+            this.hooks.log.info(message);
+            session.refusedFor = busy;
+        }
+        session.refusedAt = Date.now();
+        return busyReason(this.hooks.name?.(busy) ?? busy);
     }
 
     private stop(serial: string, session: Session, reason: string): Promise<void> {
@@ -578,8 +606,8 @@ export class OnDemandStreams {
     }
 
     /**
-     * Finds another device of the same group whose livestream is starting or watched. Starting
-     * the requested device would end that livestream.
+     * Finds another device of the same group whose livestream is starting or watched, or used by
+     * the adapter. Starting the requested device would end that livestream.
      *
      * @param serial Serial of the device that is requested
      * @returns The serial of that device, if there is one
@@ -596,7 +624,7 @@ export class OnDemandStreams {
             if (
                 other !== serial &&
                 (session.live || starting) &&
-                this.sinkCount(session) > 0 &&
+                (this.sinkCount(session) > 0 || this.hooks.inUse?.(other)) &&
                 this.hooks.group?.(other) === group
             ) {
                 return other;
@@ -714,13 +742,13 @@ export class OnDemandStreams {
         return session.sinks[track].delete(sink);
     }
 
-    private endSinks(session: Session, track: OnDemandTrack, status: number): void {
+    private endSinks(session: Session, track: OnDemandTrack, status: number, reason?: string): void {
         for (const sink of [...session.sinks[track]]) {
             this.removeSink(session, track, sink);
             if (sink.response.headersSent) {
                 sink.response.end();
             } else {
-                sink.response.writeHead(status).end();
+                sink.response.writeHead(status, reason).end();
             }
         }
     }
