@@ -525,8 +525,8 @@ export class OnDemandStreams {
         session.requestedAt = Date.now();
         session.startedAt = session.requestedAt;
         this.hooks.log.info(`On-demand stream ${serial}: ${reason} - starting livestream`);
-        const start: Promise<void> = this.hooks
-            .start(serial)
+        const start: Promise<void> = Promise.all(this.handOver(serial))
+            .then(() => this.hooks.start(serial))
             .catch(error => {
                 session.starting = false;
                 this.hooks.log.warn(`On-demand stream ${serial}: livestream could not be started: ${error}`);
@@ -537,6 +537,44 @@ export class OnDemandStreams {
                 }
             });
         session.start = start;
+    }
+
+    /**
+     * Stops the livestreams of the other devices of the group that nobody watches anymore and that
+     * wait for their idle stop. Starting a device while one of them still runs makes the library end
+     * that livestream only on its own side - the station is never sent the stop, and the new
+     * livestream does not arrive.
+     *
+     * @param serial Serial of the device that starts
+     * @returns The stops, the start waits for them
+     */
+    private handOver(serial: string): Promise<void>[] {
+        const group = this.hooks.group?.(serial);
+        if (group === undefined) {
+            return [];
+        }
+        const stops: Promise<void>[] = [];
+        for (const [other, session] of this.sessions) {
+            if (
+                other !== serial &&
+                session.stopTimer !== undefined &&
+                (session.live || session.starting) &&
+                this.hooks.group?.(other) === group
+            ) {
+                this.clearStopTimer(session);
+                stops.push(this.stop(other, session, `${serial} takes over the station`));
+            }
+        }
+        return stops;
+    }
+
+    private stop(serial: string, session: Session, reason: string): Promise<void> {
+        session.watched = false;
+        session.starting = false;
+        this.hooks.log.info(`On-demand stream ${serial}: ${reason} - stopping livestream`);
+        return this.hooks.stop(serial).catch(error => {
+            this.hooks.log.warn(`On-demand stream ${serial}: livestream could not be stopped: ${error}`);
+        });
     }
 
     /**
@@ -625,12 +663,7 @@ export class OnDemandStreams {
                 if (this.sinkCount(session) > 0 || (!session.live && !session.starting)) {
                     return;
                 }
-                session.watched = false;
-                session.starting = false;
-                this.hooks.log.info(`On-demand stream ${serial}: nobody watches anymore - stopping livestream`);
-                this.hooks.stop(serial).catch(error => {
-                    this.hooks.log.warn(`On-demand stream ${serial}: livestream could not be stopped: ${error}`);
-                });
+                void this.stop(serial, session, 'nobody watches anymore');
                 // A page reload comes back within the grace period, a viewer of another device of the
                 // station is not served until this livestream ends - hand the station over quickly.
             },

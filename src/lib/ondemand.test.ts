@@ -606,6 +606,86 @@ describe('ondemand => OnDemandStreams', () => {
         pull(streams.sources('CAM2')[0]);
         await wait(50);
         expect(started).to.deep.equal(['CAM1', 'CAM2']);
+        expect(stopped).to.deep.equal(['CAM1']);
+    });
+
+    it('should stop the idle livestream of another device of the station before starting', async () => {
+        const order: string[] = [];
+        let finishStop!: () => void;
+        const streams: OnDemandStreams = new OnDemandStreams(
+            {
+                start: serial => {
+                    order.push(`start ${serial}`);
+                    return untilDelivered(() => streams)(serial);
+                },
+                stop: serial => {
+                    order.push(`stop ${serial}`);
+                    return new Promise<void>(resolve => (finishStop = resolve));
+                },
+                group: serial => (serial === 'CAM3' ? 'OTHER' : 'STATION'),
+                log: silent,
+            },
+            { idleStopDelay: 300, firstDataTimeout: 1500, audioTimeout: 100 },
+        );
+        await streams.listen();
+        try {
+            const first = pull(streams.sources('CAM1')[0]);
+            await wait(50);
+            streams.attach('CAM1', new stream.PassThrough(), new stream.PassThrough());
+            first.request.destroy();
+            await wait(50);
+
+            // A device of another station leaves the idle livestream alone.
+            const other = pull(streams.sources('CAM3')[0]);
+            await wait(50);
+            expect(order).to.deep.equal(['start CAM1', 'start CAM3']);
+
+            const second = pull(streams.sources('CAM2')[0]);
+            await wait(50);
+            expect(order).to.deep.equal(['start CAM1', 'start CAM3', 'stop CAM1']);
+            finishStop();
+            await wait(50);
+            expect(order).to.deep.equal(['start CAM1', 'start CAM3', 'stop CAM1', 'start CAM2']);
+
+            // The idle stop of the first device does not come a second time.
+            streams.detach('CAM1');
+            await wait(400);
+            expect(order).to.deep.equal(['start CAM1', 'start CAM3', 'stop CAM1', 'start CAM2']);
+            other.request.destroy();
+            second.request.destroy();
+        } finally {
+            await streams.close();
+        }
+    });
+
+    it('should start even when stopping the idle livestream of the station fails', async () => {
+        const started: string[] = [];
+        const streams: OnDemandStreams = new OnDemandStreams(
+            {
+                start: serial => {
+                    started.push(serial);
+                    return untilDelivered(() => streams)(serial);
+                },
+                stop: () => Promise.reject(new Error('station not connected')),
+                group: () => 'STATION',
+                log: silent,
+            },
+            { idleStopDelay: 300, firstDataTimeout: 1500, audioTimeout: 100 },
+        );
+        await streams.listen();
+        try {
+            const first = pull(streams.sources('CAM1')[0]);
+            await wait(50);
+            streams.attach('CAM1', new stream.PassThrough(), new stream.PassThrough());
+            first.request.destroy();
+            await wait(50);
+            const second = pull(streams.sources('CAM2')[0]);
+            await wait(50);
+            expect(started).to.deep.equal(['CAM1', 'CAM2']);
+            second.request.destroy();
+        } finally {
+            await streams.close();
+        }
     });
 
     it('should stop a start that never delivered once nobody waits for it anymore', async () => {
