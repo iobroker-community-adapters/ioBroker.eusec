@@ -1926,7 +1926,8 @@ export class euSec extends Adapter {
                 }
                 this.clearLivestreamTimeout(device.getSerial());
                 this.onDemand?.detach(device.getSerial());
-                // On demand the next request of go2rtc starts a livestream once the station is back.
+                // On demand a request of go2rtc that still waits starts a livestream right away, which
+                // only succeeds once the station is back; until then the request waits or times out.
                 await this.setLivestreamStates(device, this.onDemand !== undefined);
             }
         } catch (error) {

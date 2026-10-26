@@ -421,10 +421,10 @@ export class OnDemandStreams {
             }
         }
         this.clearStopTimer(session);
-        // A request that came after the idle stop was asked for joined the livestream that was
-        // ending. Without a start it would wait until firstDataTimeout.
+        // A request still waits - e.g. one that joined the livestream after the idle stop was asked
+        // for, or whose station dropped. Without a start it would wait until firstDataTimeout.
         if (!session.start && this.sinkCount(session) > 0) {
-            this.start(serial, session, 'stopped before it delivered to a waiting request of go2rtc');
+            this.start(serial, session, 'livestream ended while a request of go2rtc still waits');
         }
     }
 
