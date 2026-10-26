@@ -231,6 +231,25 @@ describe('ondemand => OnDemandStreams', () => {
         second.request.destroy();
     });
 
+    it('should not start a second time when a livestream stops while its start still runs', async () => {
+        // The retries of startUntilDelivered() stop a livestream the camera never answered, and
+        // a station that drops reports the stop of each of its devices - both while the start runs.
+        await create();
+        const waiting = pull(streams.sources('CAM1')[0]);
+        await wait(50);
+        expect(started).to.deep.equal(['CAM1']);
+        streams.detach('CAM1');
+        streams.detach('CAM1');
+        await wait(50);
+        expect(started).to.deep.equal(['CAM1']);
+
+        const cameraVideo = new stream.PassThrough();
+        streams.attach('CAM1', cameraVideo, new stream.PassThrough());
+        cameraVideo.write(keyframe('frame'));
+        expect((await waiting.response).statusCode).to.equal(200);
+        waiting.request.destroy();
+    });
+
     it('should not start again when a livestream stops that nobody waits for', async () => {
         await create();
         const cameraVideo = new stream.PassThrough();
