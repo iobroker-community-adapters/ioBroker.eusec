@@ -63,6 +63,7 @@ import {
     keepStationsConnected,
     excludeDevices,
     parseSerialList,
+    watchPushConnection,
 } from './lib/eufyApiCompat';
 import {
     buildPlayerUrl,
@@ -107,6 +108,7 @@ export class euSec extends Adapter {
     private persistentFile: string = 'adapter.json';
     private persistentDriverFile: string = 'driver.json';
     private logger!: ioBrokerLogger;
+    private readonly push = watchPushConnection(message => this.logger.warn(message));
     private persistentData: PersistentData = {
         version: '',
     };
@@ -1391,10 +1393,12 @@ export class euSec extends Adapter {
     }
 
     private async onPushConnect(): Promise<void> {
+        this.push.connect();
         await this.setStateAsync('info.push_connection', { val: true, ack: true }).catch(() => {});
     }
 
     private async onPushClose(): Promise<void> {
+        this.push.close();
         await this.setStateAsync('info.push_connection', { val: false, ack: true }).catch(() => {});
     }
 

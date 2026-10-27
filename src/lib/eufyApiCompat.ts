@@ -52,9 +52,12 @@
  * For a migrated account the check can never succeed, but it runs again on every push reconnect,
  * which is what iobroker-community-adapters/ioBroker.eusec#173 reports. The results are not used
  * anywhere either: the library assigns them to `pushCloudRegistered`/`pushCloudChecked` and never
- * reads those again. So the first rejection is remembered and the endpoint is not asked a second
- * time - that keeps the single honest error of a genuinely broken legacy registration while
- * dropping the repetition, and saves two HTTP round trips per reconnect.
+ * reads those again. So the check is made by the adapter itself, the first rejection is logged once
+ * at info level and remembered, and the endpoint is not asked a second time - that saves two HTTP
+ * round trips per reconnect.
+ *
+ * Whether a rejection matters shows only once the v6 backend has answered too, and the library
+ * reports push failing on both at info level only. watchPushConnection() warns about that instead.
  *
  * Remove this shim once the library stops asking the legacy endpoint for migrated accounts.
  *
@@ -362,6 +365,36 @@ export const isExcludedEntry = (entry: unknown): boolean => {
     return [device_sn, station_sn].some(serial => typeof serial === 'string' && excludedSerials.has(serial));
 };
 
+/** `HTTPApi.apiPushCheck`, which is private. */
+const LEGACY_PUSH_CHECK = 'v1/app/review/app_push_check';
+
+/**
+ * Tells a push connection that never came up from one that closed after it was established. The
+ * library emits "push close" for both, the first one also when neither backend accepted the token.
+ *
+ * @param warn Called once per failed attempt series, until push connects again
+ * @returns Handlers for the "push connect" and "push close" events of EufySecurity
+ */
+export const watchPushConnection = (warn: (message: string) => void): { connect: () => void; close: () => void } => {
+    let connected = false;
+    let warned = false;
+    return {
+        connect: (): void => {
+            connected = true;
+            warned = false;
+        },
+        close: (): void => {
+            if (!connected && !warned) {
+                warned = true;
+                warn(
+                    'Push notifications could not be established. Events eufy delivers by push, such as motion and doorbell notifications, do not arrive until it reconnects.',
+                );
+            }
+            connected = false;
+        },
+    };
+};
+
 let patched = false;
 
 /**
@@ -394,22 +427,30 @@ export const applyEufyApiCompatibility = (log: (message: string) => void): void 
         return response;
     };
 
-    // 2. Ask the legacy push endpoint once. A migrated account is rejected by it for good.
-    const originalCheckPushToken = HTTPApi.prototype.checkPushToken;
+    // 2. Ask the legacy push endpoint once, without the error the library logs for its expected rejection.
     let legacyPushRejected = false;
 
     HTTPApi.prototype.checkPushToken = async function (): Promise<boolean> {
         if (legacyPushRejected) {
             return false;
         }
-        const accepted = await originalCheckPushToken.call(this);
-        if (!accepted) {
-            legacyPushRejected = true;
-            log(
-                'The legacy push endpoint rejected this account, which is expected once it has been migrated to the v6 backend. The adapter stops asking it - push is delivered over v6.',
-            );
+        const response = await this.makePostRequest(LEGACY_PUSH_CHECK, {
+            app_type: 'eufySecurity',
+            transaction: `${Date.now()}`,
+        });
+        // No response: the library has logged why. Not a rejection, so the next reconnect asks again.
+        if (response === undefined) {
+            return false;
         }
-        return accepted;
+        const { code, msg } = (response.data ?? {}) as { code?: unknown; msg?: unknown };
+        if (code === 0) {
+            return true;
+        }
+        legacyPushRejected = true;
+        log(
+            `The legacy push endpoint rejected this account (code ${String(code)}: ${String(msg)}), which is expected once it has been migrated to the v6 backend. The adapter stops asking it - push is delivered over v6.`,
+        );
+        return false;
     };
 
     // 3. Repeat a v6 call whose identity the backend rejected, using the renegotiated one.

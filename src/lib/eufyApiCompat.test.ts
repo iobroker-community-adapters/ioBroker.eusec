@@ -13,7 +13,7 @@ import {
     PropertyName,
     Station,
 } from 'eufy-security-client';
-import type { DeviceListResponse, MegaResult, StationListResponse } from 'eufy-security-client';
+import type { ApiResponse, DeviceListResponse, MegaResult, StationListResponse } from 'eufy-security-client';
 
 import {
     applyEufyApiCompatibility,
@@ -26,6 +26,7 @@ import {
     normalizeSuccessCode,
     parseSerialList,
     substituteDeviceTypes,
+    watchPushConnection,
 } from './eufyApiCompat';
 
 describe('eufyApiCompat => parseSerialList', () => {
@@ -207,15 +208,18 @@ describe('eufyApiCompat => applyEufyApiCompatibility', () => {
     const api = Object.create(HTTPApi.prototype) as HTTPApi;
     const mega = Object.create(MegaHTTPApi.prototype) as MegaHTTPApi;
     const messages: string[] = [];
-    let pushTokenAccepted = false;
-    let checkPushTokenCalls = 0;
+    let pushCheckResponse: ApiResponse | undefined;
+    let pushCheckEndpoints: string[] = [];
     let callResults: MegaResult[] = [];
     let callArguments: unknown[][] = [];
 
     before(() => {
         HTTPApi.prototype.checkPushToken = function (): Promise<boolean> {
-            checkPushTokenCalls++;
-            return Promise.resolve(pushTokenAccepted);
+            throw new Error('the library check logs its expected rejection as an error and must not run');
+        };
+        HTTPApi.prototype.makePostRequest = function (endPoint: string): Promise<ApiResponse | undefined> {
+            pushCheckEndpoints.push(endPoint);
+            return Promise.resolve(pushCheckResponse);
         };
         MegaHTTPApi.prototype.call = function (host: string, path: string, payload: unknown): Promise<MegaResult> {
             callArguments.push([host, path, payload]);
@@ -248,21 +252,36 @@ describe('eufyApiCompat => applyEufyApiCompatibility', () => {
         callArguments = [];
     });
 
+    const pushCheck = (data: unknown): ApiResponse => ({ status: 200, statusText: 'OK', data }) as ApiResponse;
+
     it('should keep asking the legacy push endpoint while it accepts the token', async () => {
-        pushTokenAccepted = true;
+        pushCheckResponse = pushCheck({ code: 0, msg: 'Succeed.' });
         expect(await api.checkPushToken()).to.equal(true);
         expect(await api.checkPushToken()).to.equal(true);
-        expect(checkPushTokenCalls).to.equal(2);
+        expect(pushCheckEndpoints).to.deep.equal(['v1/app/review/app_push_check', 'v1/app/review/app_push_check']);
+    });
+
+    it('should ask the legacy push endpoint again after it could not be reached', async () => {
+        pushCheckEndpoints = [];
+        pushCheckResponse = undefined;
+        expect(await api.checkPushToken()).to.equal(false);
+        expect(await api.checkPushToken()).to.equal(false);
+        expect(pushCheckEndpoints.length, 'no answer is no rejection').to.equal(2);
+        expect(messages.some(message => message.includes('legacy push endpoint'))).to.equal(false);
     });
 
     it('should stop asking the legacy push endpoint after it rejected the account', async () => {
-        pushTokenAccepted = false;
+        pushCheckEndpoints = [];
+        pushCheckResponse = pushCheck({ code: 10003, msg: 'Anfrage fehlgeschlagen.' });
         expect(await api.checkPushToken()).to.equal(false);
-        expect(checkPushTokenCalls).to.equal(3);
+        expect(pushCheckEndpoints.length).to.equal(1);
 
+        pushCheckResponse = pushCheck({ code: 0, msg: 'Succeed.' });
         expect(await api.checkPushToken()).to.equal(false);
-        expect(checkPushTokenCalls, 'the endpoint must not be asked a second time').to.equal(3);
-        expect(messages.some(message => message.includes('legacy push endpoint'))).to.equal(true);
+        expect(pushCheckEndpoints.length, 'the endpoint must not be asked a second time').to.equal(1);
+        const reported = messages.filter(message => message.includes('legacy push endpoint'));
+        expect(reported).to.have.length(1);
+        expect(reported[0]).to.include('code 10003: Anfrage fehlgeschlagen.');
     });
 
     it('should repeat a v6 call whose identity was rejected', async () => {
@@ -592,5 +611,51 @@ describe('eufyApiCompat => eufyClientOptions', function () {
         const encrypted = key.encrypt(aesKey);
         encrypted[0] ^= 0xff;
         expect(() => key.decrypt(encrypted)).to.throw();
+    });
+});
+
+describe('eufyApiCompat => watchPushConnection', () => {
+    const watch = (): { push: ReturnType<typeof watchPushConnection>; warnings: string[] } => {
+        const warnings: string[] = [];
+        return { push: watchPushConnection(message => warnings.push(message)), warnings };
+    };
+
+    it('should warn once when push never connects', () => {
+        const { push, warnings } = watch();
+        push.close();
+        push.close();
+        push.close();
+        expect(warnings).to.have.length(1);
+        expect(warnings[0]).to.include('could not be established');
+    });
+
+    it('should not warn when an established connection closes', () => {
+        const { push, warnings } = watch();
+        push.connect();
+        push.close();
+        push.connect();
+        push.close();
+        expect(warnings).to.deep.equal([]);
+    });
+
+    it('should warn when a reconnect fails, and again after the next one succeeded and failed', () => {
+        const { push, warnings } = watch();
+        push.connect();
+        push.close();
+        push.close();
+        push.close();
+        expect(warnings).to.have.length(1);
+
+        push.connect();
+        push.close();
+        push.close();
+        expect(warnings).to.have.length(2);
+    });
+
+    it('should not warn before anything happened or on connect alone', () => {
+        const { push, warnings } = watch();
+        push.connect();
+        push.connect();
+        expect(warnings).to.deep.equal([]);
     });
 });
