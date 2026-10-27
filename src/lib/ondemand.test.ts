@@ -14,9 +14,65 @@ import {
     parseOnDemandPath,
     startUntilDelivered,
 } from './ondemand';
+import type { OnDemandHooks, OnDemandOptions } from './ondemand';
 
 const silent = { debug: (): void => {}, info: (): void => {}, warn: (): void => {} };
 const wait = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Waits, in real time, for what travels over the loopback interface - a request that reaches the
+ * server, an answer, a closed connection. Gives up after ten seconds and leaves the report to the
+ * expect that follows.
+ */
+const eventually = async (condition: () => boolean): Promise<void> => {
+    const deadline = Date.now() + 10000;
+    while (!condition() && Date.now() < deadline) {
+        await wait(5);
+    }
+};
+
+/** Lets the promise chains a timer callback started run. */
+const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+
+/**
+ * The timers and the time of OnDemandStreams, which only move on when a test says so. A busy
+ * machine can delay what travels over the network, but it never lets a timeout pass by itself.
+ */
+class Clock {
+    private time = 0;
+    private readonly timers = new Set<{ at: number; callback: () => void }>();
+    public readonly hooks: Pick<OnDemandHooks, 'setTimeout' | 'clearTimeout' | 'now'> = {
+        setTimeout: (callback, ms) => {
+            const timer = { at: this.time + ms, callback };
+            this.timers.add(timer);
+            return timer;
+        },
+        clearTimeout: timer => void this.timers.delete(timer as { at: number; callback: () => void }),
+        now: () => this.time,
+    };
+
+    /**
+     * Moves the time on and fires the timers that fall due, in order, each after the previous one
+     * settled - also the ones those set.
+     *
+     * @param ms How far
+     */
+    public async advance(ms: number): Promise<void> {
+        const end = this.time + ms;
+        for (;;) {
+            const next = [...this.timers].filter(timer => timer.at <= end).sort((a, b) => a.at - b.at)[0];
+            if (!next) {
+                break;
+            }
+            this.timers.delete(next);
+            this.time = next.at;
+            next.callback();
+            await flush();
+        }
+        this.time = end;
+        await flush();
+    }
+}
 
 /**
  * A start hook that behaves like startUntilDelivered(): it runs until the livestream arrived or
@@ -75,28 +131,64 @@ describe('ondemand => parseOnDemandPath', () => {
     });
 });
 
-describe('ondemand => OnDemandStreams', () => {
+describe('ondemand => OnDemandStreams', function () {
+    // eventually() may take long on a busy machine, the timers of the streams never do.
+    this.timeout(30000);
+
     let streams: OnDemandStreams;
+    let clock: Clock;
     let started: string[];
     let stopped: string[];
+    /** The requests that reached the server and were not refused, as "serial track". */
+    let requested: string[];
+    let logged: { debug: string[]; info: string[]; warn: string[] };
+    /** Devices whose start hook still runs - a request that comes meanwhile joins it. */
+    let running: Set<string>;
 
-    const create = async (options = {}, group?: (serial: string) => string | undefined): Promise<number> => {
+    /** A start hook like untilDelivered() that also maintains running. */
+    const deliver = (serial: string): Promise<void> => {
+        running.add(serial);
+        return untilDelivered(() => streams)(serial).finally(() => void running.delete(serial));
+    };
+
+    const create = async (
+        options: Partial<OnDemandOptions> = {},
+        hooks: Partial<OnDemandHooks> = {},
+    ): Promise<void> => {
+        clock = new Clock();
         started = [];
         stopped = [];
+        requested = [];
+        logged = { debug: [], info: [], warn: [] };
+        running = new Set();
         streams = new OnDemandStreams(
             {
                 start: serial => {
                     started.push(serial);
-                    return untilDelivered(() => streams)(serial);
+                    return deliver(serial);
                 },
                 stop: serial => Promise.resolve(void stopped.push(serial)),
-                group,
-                log: silent,
+                log: {
+                    debug: message => {
+                        logged.debug.push(message);
+                        const request = /^On-demand stream (\S+): go2rtc requests the (video|audio)/.exec(message);
+                        if (request) {
+                            requested.push(`${request[1]} ${request[2]}`);
+                        }
+                    },
+                    info: message => void logged.info.push(message),
+                    warn: message => void logged.warn.push(message),
+                },
+                ...clock.hooks,
+                ...hooks,
             },
             { idleStopDelay: 300, stopSettle: 0, firstDataTimeout: 1500, audioTimeout: 100, ...options },
         );
-        return streams.listen();
+        await streams.listen();
     };
+
+    /** Waits until the server saw every request of the device closed. */
+    const closed = (serial: string): Promise<void> => eventually(() => !streams.isWatched(serial));
 
     afterEach(async () => {
         await streams.close();
@@ -107,7 +199,7 @@ describe('ondemand => OnDemandStreams', () => {
         const [videoUrl, audioUrl] = streams.sources('CAM1');
         const video = pull(videoUrl);
         const audio = pull(audioUrl);
-        await wait(50);
+        await eventually(() => requested.length === 2);
         expect(started).to.deep.equal(['CAM1']);
 
         const cameraVideo = new stream.PassThrough();
@@ -118,7 +210,7 @@ describe('ondemand => OnDemandStreams', () => {
 
         expect((await video.response).statusCode).to.equal(200);
         expect((await audio.response).statusCode).to.equal(200);
-        await wait(50);
+        await eventually(() => video.data().includes('frame') && audio.data().includes('sound'));
         expect(video.data()).to.contain('frame');
         expect(audio.data()).to.contain('sound');
     });
@@ -128,7 +220,9 @@ describe('ondemand => OnDemandStreams', () => {
         const video = pull(streams.sources('CAM1')[0]);
         let answered = false;
         void video.response.then(() => (answered = true));
-        await wait(100);
+        await eventually(() => requested.length === 1);
+        await clock.advance(1499);
+        await wait(50);
         expect(answered).to.equal(false);
 
         const cameraVideo = new stream.PassThrough();
@@ -140,35 +234,37 @@ describe('ondemand => OnDemandStreams', () => {
     it('should stop the livestream once nobody watched it for the grace period', async () => {
         await create();
         const video = pull(streams.sources('CAM1')[0]);
-        await wait(50);
+        await eventually(() => requested.length === 1);
         const cameraVideo = new stream.PassThrough();
         streams.attach('CAM1', cameraVideo, new stream.PassThrough());
         cameraVideo.write(keyframe('frame'));
         await video.response;
 
         video.request.destroy();
-        await wait(50);
+        await closed('CAM1');
+        await clock.advance(299);
         expect(stopped).to.deep.equal([]);
-        await wait(400);
+        await clock.advance(1);
         expect(stopped).to.deep.equal(['CAM1']);
     });
 
     it('should keep the livestream when go2rtc comes back within the grace period', async () => {
         await create({ idleStopDelay: 400 });
         const first = pull(streams.sources('CAM1')[0]);
-        await wait(50);
+        await eventually(() => requested.length === 1);
         const cameraVideo = new stream.PassThrough();
         streams.attach('CAM1', cameraVideo, new stream.PassThrough());
         cameraVideo.write(keyframe('frame'));
         await first.response;
         first.request.destroy();
-        await wait(50);
+        await closed('CAM1');
+        await clock.advance(399);
 
         const second = pull(streams.sources('CAM1')[0]);
-        await wait(50);
+        await eventually(() => requested.length === 2);
         cameraVideo.write(keyframe('more'));
         expect((await second.response).statusCode).to.equal(200);
-        await wait(600);
+        await clock.advance(1000);
         expect(stopped).to.deep.equal([]);
         expect(started).to.deep.equal(['CAM1']);
         second.request.destroy();
@@ -179,7 +275,7 @@ describe('ondemand => OnDemandStreams', () => {
         const cameraVideo = new stream.PassThrough();
         streams.attach('CAM1', cameraVideo, new stream.PassThrough());
         cameraVideo.write(keyframe('frame'));
-        await wait(400);
+        await clock.advance(1000);
         expect(stopped).to.deep.equal([]);
         expect(cameraVideo.readableFlowing).to.equal(true);
     });
@@ -187,42 +283,40 @@ describe('ondemand => OnDemandStreams', () => {
     it('should end the requests when the livestream stops, so go2rtc reconnects', async () => {
         await create();
         const video = pull(streams.sources('CAM1')[0]);
-        await wait(50);
+        await eventually(() => requested.length === 1);
         const cameraVideo = new stream.PassThrough();
         streams.attach('CAM1', cameraVideo, new stream.PassThrough());
         cameraVideo.write(keyframe('frame'));
         const response = await video.response;
-        // Let the start hook see the livestream arrive - it polls every 10 ms, and a hook that still
-        // runs takes the next request over instead of a new start. Timers fire in order, so this
-        // holds on a busy machine as well.
-        await wait(50);
+        // A start hook that still runs takes the next request over instead of a new start.
+        await eventually(() => !running.has('CAM1'));
         const ended = new Promise(resolve => response.on('end', resolve));
         streams.detach('CAM1');
         await ended;
 
         pull(streams.sources('CAM1')[0]);
-        await wait(50);
+        await eventually(() => started.length === 2);
         expect(started).to.deep.equal(['CAM1', 'CAM1']);
     });
 
     it('should start again for a request that joined a livestream which stopped before it delivered', async () => {
         await create({ idleStopDelay: 100 });
         const first = pull(streams.sources('CAM1')[0]);
-        await wait(50);
+        await eventually(() => requested.length === 1);
         const cameraVideo = new stream.PassThrough();
         streams.attach('CAM1', cameraVideo, new stream.PassThrough());
         cameraVideo.write(keyframe('frame'));
         await first.response;
-        await wait(50);
+        await eventually(() => !running.has('CAM1'));
         first.request.destroy();
-        await wait(200);
+        await closed('CAM1');
+        await clock.advance(100);
         // The stop is asked for, the camera still streams until the library reports the end.
         expect(stopped).to.deep.equal(['CAM1']);
 
         const second = pull(streams.sources('CAM1')[0]);
-        await wait(50);
+        await eventually(() => requested.length === 2);
         streams.detach('CAM1');
-        await wait(50);
         expect(started).to.deep.equal(['CAM1', 'CAM1']);
         const nextVideo = new stream.PassThrough();
         streams.attach('CAM1', nextVideo, new stream.PassThrough());
@@ -236,11 +330,10 @@ describe('ondemand => OnDemandStreams', () => {
         // a station that drops reports the stop of each of its devices - both while the start runs.
         await create();
         const waiting = pull(streams.sources('CAM1')[0]);
-        await wait(50);
+        await eventually(() => requested.length === 1);
         expect(started).to.deep.equal(['CAM1']);
         streams.detach('CAM1');
         streams.detach('CAM1');
-        await wait(50);
         expect(started).to.deep.equal(['CAM1']);
 
         const cameraVideo = new stream.PassThrough();
@@ -256,7 +349,6 @@ describe('ondemand => OnDemandStreams', () => {
         streams.attach('CAM1', cameraVideo, new stream.PassThrough());
         streams.detach('CAM1');
         streams.detach('UNKNOWN');
-        await wait(50);
         expect(started).to.deep.equal([]);
     });
 
@@ -264,10 +356,14 @@ describe('ondemand => OnDemandStreams', () => {
         await create();
         const [videoUrl, audioUrl] = streams.sources('CAM1');
         const audio = pull(audioUrl);
-        await wait(50);
+        await eventually(() => requested.length === 1);
         const cameraVideo = new stream.PassThrough();
         streams.attach('CAM1', cameraVideo, new stream.PassThrough());
         cameraVideo.write(keyframe('frame'));
+        await eventually(() => logged.info.some(message => message.includes('first picture')));
+        await clock.advance(99);
+        expect(logged.info.some(message => message.includes('no audio'))).to.equal(false);
+        await clock.advance(1);
         expect((await audio.response).statusCode).to.equal(404);
 
         // Every further consumer learns it right away instead of waiting again.
@@ -279,20 +375,22 @@ describe('ondemand => OnDemandStreams', () => {
     it('should answer 504 when the camera never delivers, and try again on the next request', async () => {
         await create({ firstDataTimeout: 100 });
         const video = pull(streams.sources('CAM1')[0]);
+        await eventually(() => requested.length === 1);
+        await clock.advance(100);
         expect((await video.response).statusCode).to.equal(504);
-        await wait(50);
+        await eventually(() => !running.has('CAM1'));
         pull(streams.sources('CAM1')[0]);
-        await wait(50);
+        await eventually(() => started.length === 2);
         expect(started).to.deep.equal(['CAM1', 'CAM1']);
     });
 
     it('should schedule and clear its timers through the hooks', async () => {
         const scheduled: number[] = [];
         let cleared = 0;
-        const streams = new OnDemandStreams(
+        await create(
+            { firstDataTimeout: 100 },
             {
                 start: () => new Promise<void>(() => {}),
-                stop: () => Promise.resolve(),
                 setTimeout: (callback, ms) => {
                     scheduled.push(ms);
                     return setTimeout(callback, ms);
@@ -301,169 +399,133 @@ describe('ondemand => OnDemandStreams', () => {
                     cleared++;
                     clearTimeout(timer as NodeJS.Timeout);
                 },
-                log: silent,
             },
-            { firstDataTimeout: 100 },
         );
-        await streams.listen();
-        try {
-            expect((await pull(streams.sources('CAM1')[0]).response).statusCode).to.equal(504);
-            expect(scheduled).to.deep.equal([100]);
-            expect(cleared).to.be.greaterThan(0);
-        } finally {
-            await streams.close();
-        }
+        expect((await pull(streams.sources('CAM1')[0]).response).statusCode).to.equal(504);
+        expect(scheduled).to.deep.equal([100]);
+        expect(cleared).to.be.greaterThan(0);
     });
 
     it('should not start a second time while a start still runs, also after a 504', async () => {
         let finish!: () => void;
         const starts: string[] = [];
-        const streams = new OnDemandStreams(
+        await create(
+            { firstDataTimeout: 100 },
             {
                 // A start whose retries take longer than firstDataTimeout.
                 start: serial => {
                     starts.push(serial);
                     return new Promise<void>(resolve => (finish = resolve));
                 },
-                stop: () => Promise.resolve(),
-                log: silent,
             },
-            { idleStopDelay: 300, firstDataTimeout: 100, audioTimeout: 100 },
         );
-        await streams.listen();
-        try {
-            expect((await pull(streams.sources('CAM1')[0]).response).statusCode).to.equal(504);
-            const again = pull(streams.sources('CAM1')[0]);
-            await wait(30);
-            expect(starts).to.deep.equal(['CAM1']);
+        const first = pull(streams.sources('CAM1')[0]);
+        await eventually(() => requested.length === 1);
+        await clock.advance(100);
+        expect((await first.response).statusCode).to.equal(504);
+        const again = pull(streams.sources('CAM1')[0]);
+        await eventually(() => requested.length === 2);
+        expect(starts).to.deep.equal(['CAM1']);
 
-            // The running start delivers to the request that came after the 504.
-            const cameraVideo = new stream.PassThrough();
-            streams.attach('CAM1', cameraVideo, new stream.PassThrough());
-            cameraVideo.write(keyframe('frame'));
-            expect((await again.response).statusCode).to.equal(200);
-            finish();
-            again.request.destroy();
+        // The running start delivers to the request that came after the 504.
+        const cameraVideo = new stream.PassThrough();
+        streams.attach('CAM1', cameraVideo, new stream.PassThrough());
+        cameraVideo.write(keyframe('frame'));
+        expect((await again.response).statusCode).to.equal(200);
+        finish();
+        again.request.destroy();
 
-            // Once it ended, the next request starts again.
-            streams.detach('CAM1');
-            await wait(20);
-            pull(streams.sources('CAM1')[0]);
-            await wait(30);
-            expect(starts).to.deep.equal(['CAM1', 'CAM1']);
-            finish();
-        } finally {
-            await streams.close();
-        }
+        // Once it ended, the next request starts again.
+        streams.detach('CAM1');
+        await closed('CAM1');
+        pull(streams.sources('CAM1')[0]);
+        await eventually(() => starts.length === 2);
+        expect(starts).to.deep.equal(['CAM1', 'CAM1']);
+        finish();
     });
 
     it('should drop data for a reader that does not keep up, and go on at the next keyframe', async () => {
-        const debugs: string[] = [];
-        const streams: OnDemandStreams = new OnDemandStreams(
-            {
-                start: untilDelivered(() => streams),
-                stop: () => Promise.resolve(),
-                log: { ...silent, debug: message => void debugs.push(message) },
-            },
-            { idleStopDelay: 300, stopSettle: 0, firstDataTimeout: 1500, audioTimeout: 100 },
-        );
-        await streams.listen();
-        try {
-            let received = 0;
-            let first: Buffer | undefined;
-            let response!: http.IncomingMessage;
-            const answered = new Promise<void>(resolve => {
-                http.get(streams.sources('CAM1')[0], res => {
-                    response = res;
-                    // Reads nothing until resumed - like a go2rtc that got stuck.
-                    res.pause();
-                    resolve();
-                });
+        await create();
+        let received = 0;
+        let first: Buffer | undefined;
+        let response!: http.IncomingMessage;
+        const answered = new Promise<void>(resolve => {
+            http.get(streams.sources('CAM1')[0], res => {
+                response = res;
+                // Reads nothing until resumed - like a go2rtc that got stuck.
+                res.pause();
+                resolve();
             });
-            await wait(50);
-            const cameraVideo = new stream.PassThrough();
-            streams.attach('CAM1', cameraVideo, new stream.PassThrough());
-            const chunk = Buffer.concat([keyframe('x'), Buffer.alloc(64 * 1024, 7)]);
+        });
+        await eventually(() => requested.length === 1);
+        const cameraVideo = new stream.PassThrough();
+        streams.attach('CAM1', cameraVideo, new stream.PassThrough());
+        const chunk = Buffer.concat([keyframe('x'), Buffer.alloc(64 * 1024, 7)]);
+        cameraVideo.write(chunk);
+        await answered;
+        // 64 MB that a stuck reader would otherwise hold in memory.
+        for (let i = 0; i < 1024; i++) {
             cameraVideo.write(chunk);
-            await answered;
-            // 64 MB that a stuck reader would otherwise hold in memory.
-            for (let i = 0; i < 1024; i++) {
-                cameraVideo.write(chunk);
-                if (i % 64 === 0) {
-                    await wait(1);
-                }
+            if (i % 64 === 0) {
+                await wait(1);
             }
-            await wait(50);
-            expect(debugs.some(message => message.includes('dropping data'))).to.equal(true);
-
-            response.on('data', (data: Buffer) => {
-                first ??= data;
-                received += data.length;
-            });
-            response.resume();
-            await wait(100);
-            cameraVideo.write(Buffer.concat([Buffer.from('tail'), keyframe('next')]));
-            await wait(100);
-            expect(received).to.be.greaterThan(0);
-            expect(received).to.be.lessThan(1025 * chunk.length);
-            expect([...first!.subarray(0, 5)]).to.deep.equal([0, 0, 0, 1, 0x67]);
-            response.destroy();
-        } finally {
-            await streams.close();
         }
+        await eventually(() => logged.debug.some(message => message.includes('dropping data')));
+        expect(logged.debug.some(message => message.includes('dropping data'))).to.equal(true);
+
+        response.on('data', (data: Buffer) => {
+            first ??= data;
+            received += data.length;
+        });
+        response.resume();
+        await eventually(() => received > 0);
+        cameraVideo.write(Buffer.concat([Buffer.from('tail'), keyframe('next')]));
+        expect(received).to.be.greaterThan(0);
+        expect(received).to.be.lessThan(1025 * chunk.length);
+        expect([...first!.subarray(0, 5)]).to.deep.equal([0, 0, 0, 1, 0x67]);
+        response.destroy();
     });
 
     it('should pass keyframes of 16 KB and more to a reader that keeps up, and drop beyond maxBuffered', async () => {
-        const debugs: string[] = [];
-        const streams: OnDemandStreams = new OnDemandStreams(
-            {
-                start: untilDelivered(() => streams),
-                stop: () => Promise.resolve(),
-                log: { ...silent, debug: message => void debugs.push(message) },
-            },
-            { idleStopDelay: 300, stopSettle: 0, firstDataTimeout: 1500, audioTimeout: 100, maxBuffered: 100 * 1024 },
-        );
-        await streams.listen();
-        try {
-            let received = 0;
-            http.get(streams.sources('CAM1')[0], res => res.on('data', (data: Buffer) => (received += data.length)));
-            await wait(50);
-            const cameraVideo = new stream.PassThrough();
-            streams.attach('CAM1', cameraVideo, new stream.PassThrough());
-            // A camera keyframe is far larger than the 16 KB at which write() starts returning false.
-            const frames = [
-                keyframe('x'.repeat(16 * 1024 - 5)),
-                Buffer.from([0, 0, 0, 1, 0x41, 1]),
-                keyframe('y'.repeat(64 * 1024)),
-                Buffer.from([0, 0, 0, 1, 0x41, 2]),
-                // Just below maxBuffered, with room for the framing of the chunked response.
-                keyframe('z'.repeat(100 * 1024 - 64)),
-                Buffer.from([0, 0, 0, 1, 0x41, 3]),
-            ];
-            for (const frame of frames) {
-                cameraVideo.write(frame);
-                await wait(20);
-            }
-            const sent = frames.reduce((sum, frame) => sum + frame.length, 0);
-            expect(debugs.some(message => message.includes('dropping data'))).to.equal(false);
-            expect(received).to.equal(sent);
-
-            // One chunk above maxBuffered is a backlog, however fast the reader is.
-            cameraVideo.write(keyframe('w'.repeat(100 * 1024)));
-            cameraVideo.write(Buffer.from([0, 0, 0, 1, 0x41, 4]));
-            await wait(50);
-            expect(debugs.some(message => message.includes('dropping data'))).to.equal(true);
-            expect(received).to.equal(sent + 5 + 100 * 1024);
-        } finally {
-            await streams.close();
+        await create({ maxBuffered: 100 * 1024 });
+        let received = 0;
+        http.get(streams.sources('CAM1')[0], res => res.on('data', (data: Buffer) => (received += data.length)));
+        await eventually(() => requested.length === 1);
+        const cameraVideo = new stream.PassThrough();
+        streams.attach('CAM1', cameraVideo, new stream.PassThrough());
+        // A camera keyframe is far larger than the 16 KB at which write() starts returning false.
+        const frames = [
+            keyframe('x'.repeat(16 * 1024 - 5)),
+            Buffer.from([0, 0, 0, 1, 0x41, 1]),
+            keyframe('y'.repeat(64 * 1024)),
+            Buffer.from([0, 0, 0, 1, 0x41, 2]),
+            // Just below maxBuffered, with room for the framing of the chunked response.
+            keyframe('z'.repeat(100 * 1024 - 64)),
+            Buffer.from([0, 0, 0, 1, 0x41, 3]),
+        ];
+        let sent = 0;
+        for (const frame of frames) {
+            cameraVideo.write(frame);
+            sent += frame.length;
+            // A reader that keeps up has read each frame before the camera sends the next.
+            await eventually(() => received === sent);
         }
+        expect(logged.debug.some(message => message.includes('dropping data'))).to.equal(false);
+        expect(received).to.equal(sent);
+
+        // One chunk above maxBuffered is a backlog, however fast the reader is.
+        cameraVideo.write(keyframe('w'.repeat(100 * 1024)));
+        cameraVideo.write(Buffer.from([0, 0, 0, 1, 0x41, 4]));
+        await eventually(() => received === sent + 5 + 100 * 1024);
+        expect(logged.debug.some(message => message.includes('dropping data'))).to.equal(true);
+        expect(received).to.equal(sent + 5 + 100 * 1024);
     });
 
     it('should report a waiting request until the livestream arrives', async () => {
         await create();
         expect(streams.isWaiting('CAM1')).to.equal(false);
         const video = pull(streams.sources('CAM1')[0]);
-        await wait(50);
+        await eventually(() => requested.length === 1);
         expect(streams.isWaiting('CAM1')).to.equal(true);
 
         const cameraVideo = new stream.PassThrough();
@@ -473,9 +535,9 @@ describe('ondemand => OnDemandStreams', () => {
     });
 
     it('should not start a second device of a station while the first one is watched', async () => {
-        await create({}, () => 'STATION');
+        await create({}, { group: () => 'STATION' });
         const first = pull(streams.sources('CAM1')[0]);
-        await wait(50);
+        await eventually(() => requested.length === 1);
         const second = pull(streams.sources('CAM2')[0]);
         expect((await second.response).statusCode).to.equal(503);
         expect(started).to.deep.equal(['CAM1']);
@@ -483,52 +545,24 @@ describe('ondemand => OnDemandStreams', () => {
     });
 
     it('should log a refusal once, not for every attempt of go2rtc', async () => {
-        const infos: string[] = [];
-        const streams: OnDemandStreams = new OnDemandStreams(
-            {
-                start: untilDelivered(() => streams),
-                stop: () => Promise.resolve(),
-                group: () => 'STATION',
-                log: { ...silent, info: message => void infos.push(message) },
-            },
-            { idleStopDelay: 300, stopSettle: 0, firstDataTimeout: 1500, audioTimeout: 100 },
-        );
-        await streams.listen();
-        try {
-            const first = pull(streams.sources('CAM1')[0]);
-            await wait(50);
-            for (const url of [...streams.sources('CAM2'), ...streams.sources('CAM2')]) {
-                await pull(url).response;
-            }
-            expect(infos.filter(message => message.includes('busy'))).to.have.length(1);
-            first.request.destroy();
-        } finally {
-            await streams.close();
+        await create({}, { group: () => 'STATION' });
+        const first = pull(streams.sources('CAM1')[0]);
+        await eventually(() => requested.length === 1);
+        for (const url of [...streams.sources('CAM2'), ...streams.sources('CAM2')]) {
+            await pull(url).response;
         }
+        expect(logged.info.filter(message => message.includes('busy'))).to.have.length(1);
+        first.request.destroy();
     });
 
     it('should name the watched device in the answer go2rtc hands on to the player', async () => {
-        const streams: OnDemandStreams = new OnDemandStreams(
-            {
-                start: untilDelivered(() => streams),
-                stop: () => Promise.resolve(),
-                group: () => 'STATION',
-                name: serial => (serial === 'CAM1' ? 'Garten Pool' : 'Haustür'),
-                log: silent,
-            },
-            { idleStopDelay: 300, stopSettle: 0, firstDataTimeout: 1500, audioTimeout: 100 },
-        );
-        await streams.listen();
-        try {
-            const first = pull(streams.sources('CAM1')[0]);
-            await wait(50);
-            const second = await pull(streams.sources('CAM2')[0]).response;
-            expect(second.statusCode).to.equal(503);
-            expect(second.statusMessage).to.equal('Station busy - Garten Pool is streaming');
-            first.request.destroy();
-        } finally {
-            await streams.close();
-        }
+        await create({}, { group: () => 'STATION', name: serial => (serial === 'CAM1' ? 'Garten Pool' : 'Haustür') });
+        const first = pull(streams.sources('CAM1')[0]);
+        await eventually(() => requested.length === 1);
+        const second = await pull(streams.sources('CAM2')[0]).response;
+        expect(second.statusCode).to.equal(503);
+        expect(second.statusMessage).to.equal('Station busy - Garten Pool is streaming');
+        first.request.destroy();
     });
 
     it('should keep the busy reason within what HTTP allows', () => {
@@ -539,29 +573,34 @@ describe('ondemand => OnDemandStreams', () => {
     });
 
     it('should hand the station over quickly when another device waits for it', async () => {
-        await create({ idleStopDelay: 2000, handoverDelay: 50 }, () => 'STATION');
+        await create({ idleStopDelay: 2000, handoverDelay: 50 }, { group: () => 'STATION' });
         const first = pull(streams.sources('CAM1')[0]);
-        await wait(50);
+        await eventually(() => requested.length === 1);
         expect((await pull(streams.sources('CAM2')[0]).response).statusCode).to.equal(503);
         first.request.destroy();
-        await wait(300);
+        await closed('CAM1');
+        await clock.advance(49);
+        expect(stopped).to.deep.equal([]);
+        await clock.advance(1);
         expect(stopped).to.deep.equal(['CAM1']);
     });
 
     it('should not let a start that never delivers keep the station for good', async () => {
-        await create({ startBlock: 100 }, () => 'STATION');
+        await create({ startBlock: 100 }, { group: () => 'STATION' });
         const first = pull(streams.sources('CAM1')[0]);
-        await wait(50);
+        await eventually(() => requested.length === 1);
         expect(streams.stationBusyWith('CAM2')).to.equal('CAM1');
-        await wait(100);
+        await clock.advance(99);
+        expect(streams.stationBusyWith('CAM2')).to.equal('CAM1');
+        await clock.advance(1);
         expect(streams.stationBusyWith('CAM2')).to.equal(undefined);
         first.request.destroy();
     });
 
     it('should answer right away for a camera whose start attempts failed, and free its station', async () => {
-        await create({ unreachableFor: 200 }, () => 'STATION');
+        await create({ unreachableFor: 200 }, { group: () => 'STATION' });
         const waiting = pull(streams.sources('CAM1')[0]);
-        await wait(50);
+        await eventually(() => requested.length === 1);
         streams.markUnreachable('CAM1');
         const answer = await waiting.response;
         expect(answer.statusCode).to.equal(503);
@@ -569,18 +608,21 @@ describe('ondemand => OnDemandStreams', () => {
         expect(streams.stationBusyWith('CAM2')).to.equal(undefined);
 
         expect((await pull(streams.sources('CAM1')[0]).response).statusCode).to.equal(503);
+        await clock.advance(199);
+        expect((await pull(streams.sources('CAM1')[0]).response).statusCode).to.equal(503);
         expect(started).to.deep.equal(['CAM1']);
-        await wait(250);
+        await clock.advance(1);
+        await eventually(() => !running.has('CAM1'));
         pull(streams.sources('CAM1')[0]);
-        await wait(50);
+        await eventually(() => started.length === 2);
         expect(started).to.deep.equal(['CAM1', 'CAM1']);
     });
 
     it('should tell start_stream which watched device keeps the station busy', async () => {
-        await create({}, serial => (serial === 'CAM3' ? 'OTHER' : 'STATION'));
+        await create({}, { group: serial => (serial === 'CAM3' ? 'OTHER' : 'STATION') });
         expect(streams.stationBusyWith('CAM2')).to.equal(undefined);
         const first = pull(streams.sources('CAM1')[0]);
-        await wait(50);
+        await eventually(() => requested.length === 1);
         expect(streams.stationBusyWith('CAM2')).to.equal('CAM1');
         expect(streams.stationBusyWith('CAM1')).to.equal(undefined);
         expect(streams.stationBusyWith('CAM3')).to.equal(undefined);
@@ -588,150 +630,155 @@ describe('ondemand => OnDemandStreams', () => {
     });
 
     it('should start devices of different stations side by side', async () => {
-        await create({}, serial => (serial === 'CAM1' ? 'A' : 'B'));
+        await create({}, { group: serial => (serial === 'CAM1' ? 'A' : 'B') });
         const first = pull(streams.sources('CAM1')[0]);
         const second = pull(streams.sources('CAM2')[0]);
-        await wait(50);
+        await eventually(() => started.length === 2);
         expect(started).to.have.members(['CAM1', 'CAM2']);
         first.request.destroy();
         second.request.destroy();
     });
 
     it('should let the next device of the station start once nobody watches the first one', async () => {
-        await create({}, () => 'STATION');
+        await create({}, { group: () => 'STATION' });
         const first = pull(streams.sources('CAM1')[0]);
-        await wait(50);
+        await eventually(() => requested.length === 1);
         first.request.destroy();
-        await wait(50);
+        await closed('CAM1');
         pull(streams.sources('CAM2')[0]);
-        await wait(50);
+        await eventually(() => started.length === 2);
         expect(started).to.deep.equal(['CAM1', 'CAM2']);
     });
 
     it('should stop the idle livestream of another device of the station before starting', async () => {
         const order: string[] = [];
         let finishStop!: () => void;
-        const streams: OnDemandStreams = new OnDemandStreams(
+        await create(
+            {},
             {
                 // Like startLivestream() of the adapter.
                 start: async serial => {
                     await streams.handOver(serial);
                     order.push(`start ${serial}`);
-                    return untilDelivered(() => streams)(serial);
+                    return deliver(serial);
                 },
                 stop: serial => {
                     order.push(`stop ${serial}`);
                     return new Promise<void>(resolve => (finishStop = resolve));
                 },
                 group: serial => (serial === 'CAM3' ? 'OTHER' : 'STATION'),
-                log: silent,
             },
-            { idleStopDelay: 300, stopSettle: 0, firstDataTimeout: 1500, audioTimeout: 100 },
         );
-        await streams.listen();
-        try {
-            const first = pull(streams.sources('CAM1')[0]);
-            await wait(50);
-            streams.attach('CAM1', new stream.PassThrough(), new stream.PassThrough());
-            first.request.destroy();
-            await wait(50);
+        const first = pull(streams.sources('CAM1')[0]);
+        await eventually(() => order.length === 1);
+        streams.attach('CAM1', new stream.PassThrough(), new stream.PassThrough());
+        await eventually(() => !running.has('CAM1'));
+        first.request.destroy();
+        await closed('CAM1');
 
-            // A device of another station leaves the idle livestream alone.
-            const other = pull(streams.sources('CAM3')[0]);
-            await wait(50);
-            expect(order).to.deep.equal(['start CAM1', 'start CAM3']);
+        // A device of another station leaves the idle livestream alone.
+        const other = pull(streams.sources('CAM3')[0]);
+        await eventually(() => order.length === 2);
+        expect(order).to.deep.equal(['start CAM1', 'start CAM3']);
 
-            const second = pull(streams.sources('CAM2')[0]);
-            await wait(50);
-            expect(order).to.deep.equal(['start CAM1', 'start CAM3', 'stop CAM1']);
-            finishStop();
-            await wait(50);
-            expect(order).to.deep.equal(['start CAM1', 'start CAM3', 'stop CAM1', 'start CAM2']);
+        const second = pull(streams.sources('CAM2')[0]);
+        await eventually(() => order.length === 3);
+        expect(order).to.deep.equal(['start CAM1', 'start CAM3', 'stop CAM1']);
+        finishStop();
+        await eventually(() => order.length === 4);
+        expect(order).to.deep.equal(['start CAM1', 'start CAM3', 'stop CAM1', 'start CAM2']);
 
-            // The idle stop of the first device does not come a second time.
-            streams.detach('CAM1');
-            await wait(400);
-            expect(order).to.deep.equal(['start CAM1', 'start CAM3', 'stop CAM1', 'start CAM2']);
-            other.request.destroy();
-            second.request.destroy();
-        } finally {
-            await streams.close();
-        }
+        // The idle stop of the first device does not come a second time.
+        streams.detach('CAM1');
+        await clock.advance(1000);
+        expect(order).to.deep.equal(['start CAM1', 'start CAM3', 'stop CAM1', 'start CAM2']);
+        other.request.destroy();
+        second.request.destroy();
     });
 
-    it('should start only once the data of a stopped livestream of the station is through', async function () {
-        // Margins of 200 ms keep it stable on a busy machine.
-        this.timeout(5000);
+    it('should start only once the data of a stopped livestream of the station is through', async () => {
         const order: string[] = [];
-        const streams: OnDemandStreams = new OnDemandStreams(
+        const waited = (serial: string): number =>
+            logged.debug.filter(message => message.startsWith(`On-demand stream ${serial}: waiting`)).length;
+        await create(
+            { idleStopDelay: 100, stopSettle: 600 },
             {
                 // Like startLivestream() of the adapter.
                 start: async serial => {
                     await streams.handOver(serial);
                     order.push(`start ${serial}`);
-                    return untilDelivered(() => streams)(serial);
+                    return deliver(serial);
                 },
                 stop: serial => Promise.resolve(void order.push(`stop ${serial}`)),
                 group: serial => (serial === 'CAM3' ? 'OTHER' : 'STATION'),
-                log: silent,
             },
-            { idleStopDelay: 100, stopSettle: 600, firstDataTimeout: 1500, audioTimeout: 100 },
         );
-        await streams.listen();
         const requests: Pull[] = [];
         try {
             // Hand-over: the start waits stopSettle after the stop it sent.
             requests.push(pull(streams.sources('CAM1')[0]));
-            await wait(50);
+            await eventually(() => order.length === 1);
             streams.attach('CAM1', new stream.PassThrough(), new stream.PassThrough());
+            // A start hook that still runs counts as starting, and its device would be stopped again.
+            await eventually(() => !running.has('CAM1'));
             requests[0].request.destroy();
-            await wait(20);
+            await closed('CAM1');
             requests.push(pull(streams.sources('CAM2')[0]));
-            await wait(200);
+            await eventually(() => waited('CAM2') === 1);
             expect(order).to.deep.equal(['start CAM1', 'stop CAM1']);
             streams.detach('CAM1');
+            await clock.advance(599);
+            expect(order).to.deep.equal(['start CAM1', 'stop CAM1']);
             // Another station is not held up by it.
             requests.push(pull(streams.sources('CAM3')[0]));
-            await wait(100);
+            await eventually(() => order.length === 3);
             expect(order).to.deep.equal(['start CAM1', 'stop CAM1', 'start CAM3']);
-            await wait(500);
+            await clock.advance(1);
+            await eventually(() => order.length === 4);
             expect(order).to.deep.equal(['start CAM1', 'stop CAM1', 'start CAM3', 'start CAM2']);
 
             // Idle stop: nothing left to hand over, the start still waits for the rest of the stop.
             streams.attach('CAM2', new stream.PassThrough(), new stream.PassThrough());
+            await eventually(() => !running.has('CAM2'));
             requests[1].request.destroy();
-            await wait(250);
+            await closed('CAM2');
+            await clock.advance(100);
             expect(order.slice(4)).to.deep.equal(['stop CAM2']);
             streams.detach('CAM2');
             requests.push(pull(streams.sources('CAM1')[0]));
-            await wait(200);
+            await eventually(() => waited('CAM1') === 1);
+            await clock.advance(599);
             expect(order.slice(4)).to.deep.equal(['stop CAM2']);
-            await wait(450);
+            await clock.advance(1);
+            await eventually(() => order.length === 6);
             expect(order.slice(4)).to.deep.equal(['stop CAM2', 'start CAM1']);
 
-            // Once the stop is longer ago than stopSettle, the start goes out right away.
+            // Once the stop is stopSettle ago, the start goes out right away.
             streams.attach('CAM1', new stream.PassThrough(), new stream.PassThrough());
+            await eventually(() => !running.has('CAM1'));
             requests[3].request.destroy();
-            await wait(250);
+            await closed('CAM1');
+            await clock.advance(100);
+            expect(order.slice(6)).to.deep.equal(['stop CAM1']);
             streams.detach('CAM1');
-            await wait(650);
+            await clock.advance(600);
             requests.push(pull(streams.sources('CAM2')[0]));
-            await wait(100);
+            await eventually(() => order.length === 8);
             expect(order.slice(6)).to.deep.equal(['stop CAM1', 'start CAM2']);
+            expect(waited('CAM2')).to.equal(1);
         } finally {
             requests.forEach(request => request.request.destroy());
-            await streams.close();
         }
     });
 
     it('should stop a livestream of the station nobody watches, also one started through start_stream', async () => {
-        await create({}, serial => (serial === 'CAM3' ? 'OTHER' : 'STATION'));
+        await create({}, { group: serial => (serial === 'CAM3' ? 'OTHER' : 'STATION') });
         // start_stream: the livestream arrives without any request of go2rtc.
         streams.attach('CAM1', new stream.PassThrough(), new stream.PassThrough());
         streams.attach('CAM3', new stream.PassThrough(), new stream.PassThrough());
         // Watched - stationBusyWith() refuses the start before it comes to a hand-over.
         const watched = pull(streams.sources('CAM4')[0]);
-        await wait(50);
+        await eventually(() => requested.length === 1);
         streams.attach('CAM4', new stream.PassThrough(), new stream.PassThrough());
         await streams.handOver('CAM2');
         expect(stopped).to.deep.equal(['CAM1']);
@@ -744,72 +791,45 @@ describe('ondemand => OnDemandStreams', () => {
 
     it('should keep the station busy while the adapter uses a livestream of it', async () => {
         let talking = true;
-        const stopped: string[] = [];
-        const streams: OnDemandStreams = new OnDemandStreams(
-            {
-                start: untilDelivered(() => streams),
-                stop: serial => Promise.resolve(void stopped.push(serial)),
-                group: () => 'STATION',
-                inUse: serial => serial === 'CAM1' && talking,
-                log: silent,
-            },
-            { idleStopDelay: 300, stopSettle: 0, firstDataTimeout: 1500, audioTimeout: 100 },
-        );
-        await streams.listen();
-        try {
-            streams.attach('CAM1', new stream.PassThrough(), new stream.PassThrough());
-            expect(streams.stationBusyWith('CAM2')).to.equal('CAM1');
-            const refused = await pull(streams.sources('CAM2')[0]).response;
-            expect(refused.statusCode).to.equal(503);
-            expect(refused.statusMessage).to.equal('Station busy - CAM1 is streaming');
-            await streams.handOver('CAM2');
-            expect(stopped).to.deep.equal([]);
+        await create({}, { group: () => 'STATION', inUse: serial => serial === 'CAM1' && talking });
+        streams.attach('CAM1', new stream.PassThrough(), new stream.PassThrough());
+        expect(streams.stationBusyWith('CAM2')).to.equal('CAM1');
+        const refused = await pull(streams.sources('CAM2')[0]).response;
+        expect(refused.statusCode).to.equal(503);
+        expect(refused.statusMessage).to.equal('Station busy - CAM1 is streaming');
+        await streams.handOver('CAM2');
+        expect(stopped).to.deep.equal([]);
 
-            // The talkback ended.
-            talking = false;
-            expect(streams.stationBusyWith('CAM2')).to.equal(undefined);
-            await streams.handOver('CAM2');
-            expect(stopped).to.deep.equal(['CAM1']);
-        } finally {
-            await streams.close();
-        }
+        // The talkback ended.
+        talking = false;
+        expect(streams.stationBusyWith('CAM2')).to.equal(undefined);
+        await streams.handOver('CAM2');
+        expect(stopped).to.deep.equal(['CAM1']);
     });
 
     it('should hand over even when stopping the livestream of the station fails', async () => {
-        const warnings: string[] = [];
-        const streams: OnDemandStreams = new OnDemandStreams(
-            {
-                start: untilDelivered(() => streams),
-                stop: () => Promise.reject(new Error('station not connected')),
-                group: () => 'STATION',
-                log: { ...silent, warn: message => void warnings.push(message) },
-            },
-            { idleStopDelay: 300, stopSettle: 0, firstDataTimeout: 1500, audioTimeout: 100 },
-        );
-        await streams.listen();
-        try {
-            streams.attach('CAM1', new stream.PassThrough(), new stream.PassThrough());
-            await streams.handOver('CAM2');
-            expect(warnings).to.deep.equal([
-                'On-demand stream CAM1: livestream could not be stopped: Error: station not connected',
-            ]);
-        } finally {
-            await streams.close();
-        }
+        await create({}, { stop: () => Promise.reject(new Error('station not connected')), group: () => 'STATION' });
+        streams.attach('CAM1', new stream.PassThrough(), new stream.PassThrough());
+        await streams.handOver('CAM2');
+        expect(logged.warn).to.deep.equal([
+            'On-demand stream CAM1: livestream could not be stopped: Error: station not connected',
+        ]);
     });
 
     it('should refuse a request that joined a livestream the station hands over', async () => {
-        await create({}, () => 'STATION');
+        await create({}, { group: () => 'STATION' });
         const first = pull(streams.sources('CAM1')[0]);
-        await wait(50);
+        await eventually(() => requested.length === 1);
         streams.attach('CAM1', new stream.PassThrough(), new stream.PassThrough());
+        // A start hook that still runs would start CAM1 again instead of refusing it.
+        await eventually(() => !running.has('CAM1'));
         first.request.destroy();
-        await wait(50);
+        await closed('CAM1');
         const second = pull(streams.sources('CAM2')[0]);
-        await wait(50);
+        await eventually(() => requested.length === 2);
         // Comes after the stop of CAM1 was sent, before the library reported it.
         const back = pull(streams.sources('CAM1')[0]);
-        await wait(50);
+        await eventually(() => requested.length === 3);
         streams.detach('CAM1');
         const answer = await back.response;
         expect(answer.statusCode).to.equal(503);
@@ -821,10 +841,13 @@ describe('ondemand => OnDemandStreams', () => {
     it('should stop a start that never delivered once nobody waits for it anymore', async () => {
         await create();
         const video = pull(streams.sources('CAM1')[0]);
-        await wait(50);
+        await eventually(() => requested.length === 1);
         expect(started).to.deep.equal(['CAM1']);
         video.request.destroy();
-        await wait(400);
+        await closed('CAM1');
+        await clock.advance(299);
+        expect(stopped).to.deep.equal([]);
+        await clock.advance(1);
         expect(stopped).to.deep.equal(['CAM1']);
     });
 });
@@ -851,23 +874,27 @@ describe('ondemand => joining a running livestream', () => {
 
     it('should hand go2rtc nothing before the next keyframe of a running livestream', async () => {
         const streams: OnDemandStreams = new OnDemandStreams(
-            { start: untilDelivered(() => streams), stop: () => Promise.resolve(), log: silent },
+            { start: untilDelivered(() => streams), stop: () => Promise.resolve(), log: silent, ...new Clock().hooks },
             { idleStopDelay: 300, stopSettle: 0, firstDataTimeout: 1500, audioTimeout: 100 },
         );
         await streams.listen();
         try {
             const cameraVideo = new stream.PassThrough();
-            streams.attach('CAM1', cameraVideo, new stream.PassThrough());
+            // Listens after the streams, so it sees a chunk once they handled it.
+            const filter = new stream.PassThrough();
+            streams.attach('CAM1', cameraVideo, new stream.PassThrough(), filter);
+            let handled = 0;
+            filter.on('data', () => handled++);
             cameraVideo.write(keyframe('before'));
-            await wait(20);
+            await eventually(() => handled === 1);
 
             const video = pull(streams.sources('CAM1')[0]);
-            await wait(50);
+            await eventually(() => streams.isWatched('CAM1'));
             // The middle of a frame, as the camera sends it - go2rtc would refuse it.
             cameraVideo.write(Buffer.from([0x03, 0xdb, 0x03, 0x84, 0x55]));
             cameraVideo.write(Buffer.concat([Buffer.from('tail'), keyframe('next')]));
             const response = await video.response;
-            await wait(50);
+            await eventually(() => video.data().includes('next'));
 
             expect(response.statusCode).to.equal(200);
             const received = Buffer.from(video.data(), 'latin1');

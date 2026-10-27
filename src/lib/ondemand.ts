@@ -40,6 +40,8 @@ export interface OnDemandHooks {
      */
     setTimeout?: (callback: () => void, ms: number) => unknown;
     clearTimeout?: (timer: unknown) => void;
+    /** The time the timers above run on, Date.now() by default. */
+    now?: () => number;
     log: {
         debug: (message: string) => void;
         info: (message: string) => void;
@@ -255,6 +257,7 @@ export class OnDemandStreams {
     private readonly options: OnDemandOptions;
     private readonly setTimer: (callback: () => void, ms: number) => unknown;
     private readonly clearTimer: (timer: unknown) => void;
+    private readonly now: () => number;
     private port = 0;
 
     public constructor(
@@ -264,6 +267,7 @@ export class OnDemandStreams {
         this.options = { ...DEFAULT_OPTIONS, ...options };
         this.setTimer = hooks.setTimeout ?? setTimeout;
         this.clearTimer = hooks.clearTimeout ?? (timer => clearTimeout(timer as NodeJS.Timeout | undefined));
+        this.now = hooks.now ?? Date.now;
         this.server = http.createServer((request, response) => this.onRequest(request, response));
         // A livestream request stays open as long as the camera streams.
         this.server.requestTimeout = 0;
@@ -332,7 +336,7 @@ export class OnDemandStreams {
                 live.videoSeen = true;
                 const waited =
                     session.requestedAt !== undefined
-                        ? ` ${Math.round((Date.now() - session.requestedAt) / 1000)} seconds after the request`
+                        ? ` ${Math.round((this.now() - session.requestedAt) / 1000)} seconds after the request`
                         : '';
                 session.requestedAt = undefined;
                 this.hooks.log.info(
@@ -375,7 +379,7 @@ export class OnDemandStreams {
             return;
         }
         session.starting = false;
-        session.unreachableUntil = Date.now() + this.options.unreachableFor;
+        session.unreachableUntil = this.now() + this.options.unreachableFor;
         const reason = unreachableReason(this.hooks.name?.(serial) ?? serial);
         for (const track of ['video', 'audio'] as const) {
             for (const sink of [...session.sinks[track]]) {
@@ -477,7 +481,7 @@ export class OnDemandStreams {
             response.writeHead(404).end();
             return;
         }
-        if (!session.live && (session.unreachableUntil ?? 0) > Date.now()) {
+        if (!session.live && (session.unreachableUntil ?? 0) > this.now()) {
             // Waking a camera that did not answer the last attempts only keeps the station busy.
             this.hooks.log.debug(`On-demand stream ${serial}: not reachable - not started`);
             response.writeHead(503, unreachableReason(this.hooks.name?.(serial) ?? serial)).end();
@@ -512,12 +516,12 @@ export class OnDemandStreams {
         session.sinks[track].add(sink);
         session.watched = true;
         this.clearStopTimer(session);
-        const opened = Date.now();
+        const opened = this.now();
         response.on('close', () => {
             if (this.removeSink(session, track, sink)) {
                 if (!response.headersSent) {
                     this.hooks.log.info(
-                        `On-demand stream ${serial}: go2rtc stopped waiting for the ${track} after ${Math.round((Date.now() - opened) / 1000)} seconds`,
+                        `On-demand stream ${serial}: go2rtc stopped waiting for the ${track} after ${Math.round((this.now() - opened) / 1000)} seconds`,
                     );
                 }
                 this.scheduleStop(serial, session);
@@ -534,7 +538,7 @@ export class OnDemandStreams {
 
     private start(serial: string, session: Session, reason: string): void {
         session.starting = true;
-        session.requestedAt = Date.now();
+        session.requestedAt = this.now();
         session.startedAt = session.requestedAt;
         this.hooks.log.info(`On-demand stream ${serial}: ${reason} - starting livestream`);
         const start: Promise<void> = this.hooks
@@ -587,13 +591,13 @@ export class OnDemandStreams {
             }
         }
         await Promise.all(stops);
-        let stoppedAt = 0;
+        let stoppedAt = -Infinity;
         for (const [other, session] of this.sessions) {
             if (this.hooks.group?.(other) === group) {
-                stoppedAt = Math.max(stoppedAt, session.stoppedAt ?? 0);
+                stoppedAt = Math.max(stoppedAt, session.stoppedAt ?? -Infinity);
             }
         }
-        const settle = stoppedAt + this.options.stopSettle - Date.now();
+        const settle = stoppedAt + this.options.stopSettle - this.now();
         if (settle > 0) {
             this.hooks.log.debug(`On-demand stream ${serial}: waiting ${settle} ms for the stopped livestream to end`);
             await new Promise<void>(resolve => this.setTimer(resolve, settle));
@@ -617,14 +621,14 @@ export class OnDemandStreams {
             this.hooks.log.info(message);
             session.refusedFor = busy;
         }
-        session.refusedAt = Date.now();
+        session.refusedAt = this.now();
         return busyReason(this.hooks.name?.(busy) ?? busy);
     }
 
     private stop(serial: string, session: Session, reason: string): Promise<void> {
         session.watched = false;
         session.starting = false;
-        session.stoppedAt = Date.now();
+        session.stoppedAt = this.now();
         this.hooks.log.info(`On-demand stream ${serial}: ${reason} - stopping livestream`);
         return this.hooks.stop(serial).catch(error => {
             this.hooks.log.warn(`On-demand stream ${serial}: livestream could not be stopped: ${error}`);
@@ -646,7 +650,7 @@ export class OnDemandStreams {
         for (const [other, session] of this.sessions) {
             // A start that has not delivered yet blocks only for a while - a camera that never
             // answers would otherwise keep the station for as long as its player retries.
-            const starting = session.starting && Date.now() - (session.startedAt ?? 0) < this.options.startBlock;
+            const starting = session.starting && this.now() - (session.startedAt ?? 0) < this.options.startBlock;
             if (
                 other !== serial &&
                 (session.live || starting) &&
@@ -736,7 +740,7 @@ export class OnDemandStreams {
         if (group === undefined) {
             return false;
         }
-        const recent = Date.now() - 30000;
+        const recent = this.now() - 30000;
         for (const [other, session] of this.sessions) {
             if (
                 other !== serial &&
