@@ -52,6 +52,8 @@ export interface OnDemandOptions {
     idleStopDelay: number;
     /** The same, while another device of the station waits for it to be free. */
     handoverDelay: number;
+    /** How long a start waits after a livestream of the station was stopped, see handOver(). */
+    stopSettle: number;
     /** How long a request waits for the camera before go2rtc is told the stream is unavailable. */
     firstDataTimeout: number;
     /** How long after the first video data audio may take before the camera counts as mute. */
@@ -77,6 +79,9 @@ export const DEFAULT_START_ATTEMPT_OPTIONS: StartAttemptOptions = {
 export const DEFAULT_OPTIONS: OnDemandOptions = {
     idleStopDelay: 10000,
     handoverDelay: 1000,
+    // Not measured: the data on its way takes milliseconds, the station may send what it buffered
+    // for a while longer.
+    stopSettle: 2000,
     // Outlasts every attempt of startUntilDelivered(), plus the time the start commands take. A 504
     // in between makes go2rtc ask again, and for that moment nobody waits - the attempts would stop
     // as if the livestream had arrived, and a camera that never answers is never paused.
@@ -214,6 +219,8 @@ interface Session {
     startedAt?: number;
     /** All start attempts failed - the device is not started again before this time. */
     unreachableUntil?: number;
+    /** When the livestream was last stopped. */
+    stoppedAt?: number;
     stopTimer?: unknown;
 }
 
@@ -551,8 +558,15 @@ export class OnDemandStreams {
      * never sent the stop, and the new livestream does not arrive. Call it for every start, after
      * stationBusyWith() let the device through.
      *
+     * Then waits until stopSettle passed since the last stop of the station. The library drops the
+     * data the station still sends for a stopped livestream only while no other one runs - it does
+     * not check which camera the data is from. Started right away, the new livestream begins with
+     * the rest of the stopped one and keeps its codec: the H.265 of a SoloCam S340 for the H.264 of
+     * an Indoor Cam, which never shows a keyframe go2rtc could begin with. Known limit: a stop sent
+     * outside this class, e.g. through stop_stream, is not waited for.
+     *
      * @param serial Serial of the device that starts
-     * @returns Settles once the stops were sent, also when one of them failed
+     * @returns Settles once the stops were sent and the station settled, also when a stop failed
      */
     public async handOver(serial: string): Promise<void> {
         const group = this.hooks.group?.(serial);
@@ -573,6 +587,17 @@ export class OnDemandStreams {
             }
         }
         await Promise.all(stops);
+        let stoppedAt = 0;
+        for (const [other, session] of this.sessions) {
+            if (this.hooks.group?.(other) === group) {
+                stoppedAt = Math.max(stoppedAt, session.stoppedAt ?? 0);
+            }
+        }
+        const settle = stoppedAt + this.options.stopSettle - Date.now();
+        if (settle > 0) {
+            this.hooks.log.debug(`On-demand stream ${serial}: waiting ${settle} ms for the stopped livestream to end`);
+            await new Promise<void>(resolve => this.setTimer(resolve, settle));
+        }
     }
 
     /**
@@ -599,6 +624,7 @@ export class OnDemandStreams {
     private stop(serial: string, session: Session, reason: string): Promise<void> {
         session.watched = false;
         session.starting = false;
+        session.stoppedAt = Date.now();
         this.hooks.log.info(`On-demand stream ${serial}: ${reason} - stopping livestream`);
         return this.hooks.stop(serial).catch(error => {
             this.hooks.log.warn(`On-demand stream ${serial}: livestream could not be stopped: ${error}`);

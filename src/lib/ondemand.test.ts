@@ -93,7 +93,7 @@ describe('ondemand => OnDemandStreams', () => {
                 group,
                 log: silent,
             },
-            { idleStopDelay: 300, firstDataTimeout: 1500, audioTimeout: 100, ...options },
+            { idleStopDelay: 300, stopSettle: 0, firstDataTimeout: 1500, audioTimeout: 100, ...options },
         );
         return streams.listen();
     };
@@ -365,7 +365,7 @@ describe('ondemand => OnDemandStreams', () => {
                 stop: () => Promise.resolve(),
                 log: { ...silent, debug: message => void debugs.push(message) },
             },
-            { idleStopDelay: 300, firstDataTimeout: 1500, audioTimeout: 100 },
+            { idleStopDelay: 300, stopSettle: 0, firstDataTimeout: 1500, audioTimeout: 100 },
         );
         await streams.listen();
         try {
@@ -421,7 +421,7 @@ describe('ondemand => OnDemandStreams', () => {
                 stop: () => Promise.resolve(),
                 log: { ...silent, debug: message => void debugs.push(message) },
             },
-            { idleStopDelay: 300, firstDataTimeout: 1500, audioTimeout: 100, maxBuffered: 100 * 1024 },
+            { idleStopDelay: 300, stopSettle: 0, firstDataTimeout: 1500, audioTimeout: 100, maxBuffered: 100 * 1024 },
         );
         await streams.listen();
         try {
@@ -491,7 +491,7 @@ describe('ondemand => OnDemandStreams', () => {
                 group: () => 'STATION',
                 log: { ...silent, info: message => void infos.push(message) },
             },
-            { idleStopDelay: 300, firstDataTimeout: 1500, audioTimeout: 100 },
+            { idleStopDelay: 300, stopSettle: 0, firstDataTimeout: 1500, audioTimeout: 100 },
         );
         await streams.listen();
         try {
@@ -516,7 +516,7 @@ describe('ondemand => OnDemandStreams', () => {
                 name: serial => (serial === 'CAM1' ? 'Garten Pool' : 'Haustür'),
                 log: silent,
             },
-            { idleStopDelay: 300, firstDataTimeout: 1500, audioTimeout: 100 },
+            { idleStopDelay: 300, stopSettle: 0, firstDataTimeout: 1500, audioTimeout: 100 },
         );
         await streams.listen();
         try {
@@ -626,7 +626,7 @@ describe('ondemand => OnDemandStreams', () => {
                 group: serial => (serial === 'CAM3' ? 'OTHER' : 'STATION'),
                 log: silent,
             },
-            { idleStopDelay: 300, firstDataTimeout: 1500, audioTimeout: 100 },
+            { idleStopDelay: 300, stopSettle: 0, firstDataTimeout: 1500, audioTimeout: 100 },
         );
         await streams.listen();
         try {
@@ -655,6 +655,71 @@ describe('ondemand => OnDemandStreams', () => {
             other.request.destroy();
             second.request.destroy();
         } finally {
+            await streams.close();
+        }
+    });
+
+    it('should start only once the data of a stopped livestream of the station is through', async function () {
+        // Margins of 200 ms keep it stable on a busy machine.
+        this.timeout(5000);
+        const order: string[] = [];
+        const streams: OnDemandStreams = new OnDemandStreams(
+            {
+                // Like startLivestream() of the adapter.
+                start: async serial => {
+                    await streams.handOver(serial);
+                    order.push(`start ${serial}`);
+                    return untilDelivered(() => streams)(serial);
+                },
+                stop: serial => Promise.resolve(void order.push(`stop ${serial}`)),
+                group: serial => (serial === 'CAM3' ? 'OTHER' : 'STATION'),
+                log: silent,
+            },
+            { idleStopDelay: 100, stopSettle: 600, firstDataTimeout: 1500, audioTimeout: 100 },
+        );
+        await streams.listen();
+        const requests: Pull[] = [];
+        try {
+            // Hand-over: the start waits stopSettle after the stop it sent.
+            requests.push(pull(streams.sources('CAM1')[0]));
+            await wait(50);
+            streams.attach('CAM1', new stream.PassThrough(), new stream.PassThrough());
+            requests[0].request.destroy();
+            await wait(20);
+            requests.push(pull(streams.sources('CAM2')[0]));
+            await wait(200);
+            expect(order).to.deep.equal(['start CAM1', 'stop CAM1']);
+            streams.detach('CAM1');
+            // Another station is not held up by it.
+            requests.push(pull(streams.sources('CAM3')[0]));
+            await wait(100);
+            expect(order).to.deep.equal(['start CAM1', 'stop CAM1', 'start CAM3']);
+            await wait(500);
+            expect(order).to.deep.equal(['start CAM1', 'stop CAM1', 'start CAM3', 'start CAM2']);
+
+            // Idle stop: nothing left to hand over, the start still waits for the rest of the stop.
+            streams.attach('CAM2', new stream.PassThrough(), new stream.PassThrough());
+            requests[1].request.destroy();
+            await wait(250);
+            expect(order.slice(4)).to.deep.equal(['stop CAM2']);
+            streams.detach('CAM2');
+            requests.push(pull(streams.sources('CAM1')[0]));
+            await wait(200);
+            expect(order.slice(4)).to.deep.equal(['stop CAM2']);
+            await wait(450);
+            expect(order.slice(4)).to.deep.equal(['stop CAM2', 'start CAM1']);
+
+            // Once the stop is longer ago than stopSettle, the start goes out right away.
+            streams.attach('CAM1', new stream.PassThrough(), new stream.PassThrough());
+            requests[3].request.destroy();
+            await wait(250);
+            streams.detach('CAM1');
+            await wait(650);
+            requests.push(pull(streams.sources('CAM2')[0]));
+            await wait(100);
+            expect(order.slice(6)).to.deep.equal(['stop CAM1', 'start CAM2']);
+        } finally {
+            requests.forEach(request => request.request.destroy());
             await streams.close();
         }
     });
@@ -688,7 +753,7 @@ describe('ondemand => OnDemandStreams', () => {
                 inUse: serial => serial === 'CAM1' && talking,
                 log: silent,
             },
-            { idleStopDelay: 300, firstDataTimeout: 1500, audioTimeout: 100 },
+            { idleStopDelay: 300, stopSettle: 0, firstDataTimeout: 1500, audioTimeout: 100 },
         );
         await streams.listen();
         try {
@@ -719,7 +784,7 @@ describe('ondemand => OnDemandStreams', () => {
                 group: () => 'STATION',
                 log: { ...silent, warn: message => void warnings.push(message) },
             },
-            { idleStopDelay: 300, firstDataTimeout: 1500, audioTimeout: 100 },
+            { idleStopDelay: 300, stopSettle: 0, firstDataTimeout: 1500, audioTimeout: 100 },
         );
         await streams.listen();
         try {
@@ -787,7 +852,7 @@ describe('ondemand => joining a running livestream', () => {
     it('should hand go2rtc nothing before the next keyframe of a running livestream', async () => {
         const streams: OnDemandStreams = new OnDemandStreams(
             { start: untilDelivered(() => streams), stop: () => Promise.resolve(), log: silent },
-            { idleStopDelay: 300, firstDataTimeout: 1500, audioTimeout: 100 },
+            { idleStopDelay: 300, stopSettle: 0, firstDataTimeout: 1500, audioTimeout: 100 },
         );
         await streams.listen();
         try {
