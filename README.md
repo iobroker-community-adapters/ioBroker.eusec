@@ -29,6 +29,10 @@ You need to provide your Cloud login credentials. The adapter connects to your c
 
 One Adapter instance will show all devices from one Eufy Cloud account and allows you to control them.
 
+> [!TIP]
+> Widgets for vis-2 (live camera, event popup, snapshot) are available as a separate adapter:
+> [vis-2-widgets-eusec](https://github.com/typhosj/ioBroker.vis-2-widgets-eusec).
+
 ## Documentation
 
 Check out the documentation [here](https://github.com/iobroker-community-adapters/ioBroker.eusec/tree/master/docs).
