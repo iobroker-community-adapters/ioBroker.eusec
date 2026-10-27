@@ -146,10 +146,7 @@ describe('ondemand => OnDemandStreams', function () {
     let running: Set<string>;
 
     /** A start hook like untilDelivered() that also maintains running. */
-    const deliver = (serial: string): Promise<void> => {
-        running.add(serial);
-        return untilDelivered(() => streams)(serial).finally(() => void running.delete(serial));
-    };
+    let deliver: (serial: string) => Promise<void>;
 
     const create = async (
         options: Partial<OnDemandOptions> = {},
@@ -160,8 +157,16 @@ describe('ondemand => OnDemandStreams', function () {
         stopped = [];
         requested = [];
         logged = { debug: [], info: [], warn: [] };
-        running = new Set();
-        streams = new OnDemandStreams(
+        // Bound to this test: a start hook of the previous one may still run, and would otherwise
+        // ask the streams of this test and take its device out of running.
+        const active = new Set<string>();
+        running = active;
+        let own!: OnDemandStreams;
+        deliver = serial => {
+            active.add(serial);
+            return untilDelivered(() => own)(serial).finally(() => void active.delete(serial));
+        };
+        streams = own = new OnDemandStreams(
             {
                 start: serial => {
                     started.push(serial);
