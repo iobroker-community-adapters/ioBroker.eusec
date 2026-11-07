@@ -4,11 +4,13 @@ import jpegJs from 'jpeg-js';
 import { CommandName, PropertyName, type Picture, type PropertyValue } from 'eufy-security-client';
 
 import {
+    contrastQuality,
     describePictureData,
     getPictureExtension,
     isFixedSizeV2Picture,
     redecodeV2Picture,
     schedulePictureOverP2P,
+    withQuality,
 } from './picture';
 
 const JPEG_HEAD = Buffer.from('ffd8ffe000104a464946', 'hex');
@@ -181,8 +183,13 @@ const v2Decoder = require(
  *
  * @param width width of the picture
  * @param height height of the picture
+ * @param quality quality the picture is encoded with
  */
-export const buildV2Picture = function (width: number, height: number): { blob: Buffer; rebuiltAt288x176: Buffer } {
+export const buildV2Picture = function (
+    width: number,
+    height: number,
+    quality = 85,
+): { blob: Buffer; rebuiltAt288x176: Buffer } {
     const pixels = Buffer.alloc(width * height * 4);
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
@@ -192,7 +199,7 @@ export const buildV2Picture = function (width: number, height: number): { blob: 
             pixels[(y * width + x) * 4 + 3] = 255;
         }
     }
-    const jpeg = jpegJs.encode({ data: pixels, width, height }, 85).data;
+    const jpeg = jpegJs.encode({ data: pixels, width, height }, quality).data;
     // jpeg-js writes the four Huffman tables into one segment, eufy one segment per table. The DC and
     // AC luma tables take 29 and 179 bytes, the DC and AC chroma tables follow.
     const dht = jpeg.indexOf(Buffer.from([0xff, 0xc4]));
@@ -267,5 +274,101 @@ describe('picture => redecodeV2Picture', function () {
         const header = rebuiltAt288x176.subarray(0, rebuiltAt288x176.indexOf(Buffer.from('ffc4001f01', 'hex')));
         expect(await redecodeV2Picture(Buffer.concat([header, Buffer.alloc(64, 0x11)]))).to.equal(undefined);
         expect(await redecodeV2Picture(Buffer.alloc(0))).to.equal(undefined);
+    });
+});
+
+/** Histogram with the same count for every value from `low` to `high`. */
+const flatHistogram = (low: number, high: number): number[] =>
+    Array.from({ length: 256 }, (_, value) => (value >= low && value <= high ? 100 : 0));
+
+describe('picture => contrastQuality', () => {
+    it('should keep quality 85 for a picture that spans the full range', () => {
+        expect(contrastQuality(flatHistogram(0, 255))).to.equal(85);
+        expect(contrastQuality(flatHistogram(5, 250)), 'exactly the target range').to.equal(85);
+    });
+
+    it('should estimate the quality of a picture squeezed around 128 (forum topic 85382)', () => {
+        // Values of the T8210 picture decoded with the quality 85 tables: 0.1 % at 110 and below,
+        // 0.1 % at 150 and above. Its own tables are about those of quality 30.
+        const histogram = flatHistogram(111, 149);
+        histogram[110] = 4;
+        histogram[150] = 4;
+        expect(contrastQuality(histogram)).to.equal(30);
+    });
+
+    it('should let the side closer to its limit decide', () => {
+        // A dark picture: stretching it 5.1 times takes its darkest values to 5, its brightest only to 179.
+        expect(contrastQuality(flatHistogram(104, 138))).to.equal(contrastQuality(flatHistogram(104, 152)));
+        expect(contrastQuality(flatHistogram(104, 138))).to.equal(33);
+    });
+
+    it('should not stretch more than MIN_QUALITY allows', () => {
+        expect(contrastQuality(flatHistogram(128, 128))).to.equal(25);
+        expect(contrastQuality(flatHistogram(125, 131))).to.equal(25);
+    });
+
+    it('should keep quality 85 for a histogram it cannot use', () => {
+        expect(contrastQuality([])).to.equal(85);
+        expect(contrastQuality(new Array<number>(256).fill(0))).to.equal(85);
+        expect(contrastQuality(flatHistogram(120, 136).slice(0, 255)), '255 entries').to.equal(85);
+        expect(contrastQuality(flatHistogram(120, 136).map(() => NaN))).to.equal(85);
+    });
+});
+
+describe('picture => withQuality', () => {
+    const { rebuiltAt288x176 } = buildV2Picture(400, 304);
+    const luma = (jpeg: Buffer): number[] => [...jpeg.subarray(25, 89)];
+    const chroma = (jpeg: Buffer): number[] => [...jpeg.subarray(94, 158)];
+
+    it('should reproduce the tables of the client header for quality 85', () => {
+        const same = withQuality(rebuiltAt288x176, 85);
+        expect(same).to.not.equal(rebuiltAt288x176);
+        expect(same.equals(rebuiltAt288x176)).to.equal(true);
+    });
+
+    it('should write the standard tables of another quality and leave the rest alone', () => {
+        const q50 = withQuality(rebuiltAt288x176, 50);
+        expect(luma(q50).slice(0, 6), 'Annex K luma table in zigzag order').to.deep.equal([16, 11, 12, 14, 12, 10]);
+        expect(chroma(q50).slice(0, 6)).to.deep.equal([17, 18, 18, 24, 21, 24]);
+        expect(Math.max(...chroma(q50))).to.equal(99);
+        expect(q50.subarray(158).equals(rebuiltAt288x176.subarray(158))).to.equal(true);
+        expect(q50.subarray(0, 25).equals(rebuiltAt288x176.subarray(0, 25))).to.equal(true);
+        expect(Math.max(...luma(withQuality(rebuiltAt288x176, 1))), 'capped at 255').to.equal(255);
+        expect(Math.min(...luma(withQuality(rebuiltAt288x176, 100))), 'at least 1').to.equal(1);
+    });
+
+    it('should leave a picture alone whose header is not the client header', () => {
+        const ordinary = jpegJs.encode({ data: Buffer.alloc(16 * 16 * 4), width: 16, height: 16 }).data;
+        expect(withQuality(ordinary, 30)).to.equal(ordinary);
+        expect(withQuality(rebuiltAt288x176.subarray(0, 120), 30), 'cut in the second table').to.deep.equal(
+            rebuiltAt288x176.subarray(0, 120),
+        );
+        expect(withQuality(Buffer.alloc(0), 30).length).to.equal(0);
+    });
+
+    it('should reject a quality outside 1..100', () => {
+        for (const quality of [0, 101, -5, NaN]) {
+            expect(withQuality(rebuiltAt288x176, quality), `quality ${quality}`).to.equal(rebuiltAt288x176);
+        }
+    });
+});
+
+describe('picture => redecodeV2Picture contrast', function () {
+    this.timeout(30000);
+
+    it('should put in the tables of the quality a picture was encoded with', async () => {
+        const rebuilt = await redecodeV2Picture(buildV2Picture(400, 304, 30).rebuiltAt288x176);
+        // Luma DC value of quality 35 is 23, of quality 25 it is 32; quality 30 has 27.
+        expect(rebuilt![25]).to.be.within(23, 32);
+        // The darkest values of the fixture are about 38; with the quality 85 tables they read about 110.
+        const darkest = (jpeg: Buffer): number => jpegJs.decode(jpeg).data.reduce((low, v) => Math.min(low, v), 255);
+        expect(darkest(rebuilt!)).to.be.below(60);
+        expect(darkest(withQuality(rebuilt!, 85)), 'without the estimate').to.be.above(90);
+    });
+
+    it('should keep the tables of a picture encoded with quality 85', async () => {
+        const { rebuiltAt288x176 } = buildV2Picture(400, 304);
+        const rebuilt = await redecodeV2Picture(rebuiltAt288x176);
+        expect(rebuilt!.subarray(25, 158).equals(rebuiltAt288x176.subarray(25, 158))).to.equal(true);
     });
 });
