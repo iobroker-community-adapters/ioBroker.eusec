@@ -15,6 +15,7 @@
  * 6. Kept P2P connection: battery devices on permanent power can opt out of the 30s disconnect - same.
  * 7. Floodlight Cam E30: defined like the Floodlight Cam E340, but its commands take another route - same.
  * 8. Excluded devices: devices and stations the instance ignores, as configured - same.
+ * 9. P2P event pictures: rebuilt at a fixed 288x176, which turns larger ones into grey streaks - same.
  *
  * ## 1. Success code
  *
@@ -169,11 +170,26 @@
  * Excluding the HomeBase as well, or not sharing the device with the account, avoids that.
  *
  * This is an option, not a correction; the library has no such filter.
+ *
+ * ## 9. P2P event pictures
+ *
+ * Newer firmware sends event pictures as `v2_eufysecurity` blobs: a JPEG whose header, with the
+ * picture size in it, is encrypted. The library replaces that header with a standard one, so it has
+ * to know the size. A picture downloaded from the cloud gets it by trial decoding
+ * (`decodeImageAsync()`). A picture the station sends over P2P, which is how a device on a HomeBase
+ * whose `picture_url` is a local path gets its picture, goes through the synchronous
+ * `decodeImage()` instead, which assumes 288x176 4:2:0. An 800x600 picture of a Video Doorbell
+ * (T8210) on a HomeBase 3 came out as a grey area with diagonal streaks (forum topic 85382). The
+ * library hands the result to `EufySecurity.onStationImageDownload()`, where such a picture is
+ * recognized by that fixed header and rebuilt with the trial decoding before anything stores it.
+ *
+ * Remove this shim once the library decodes P2P pictures at their real size.
  */
 
 import {
     Device,
     DeviceType,
+    EufySecurity,
     HTTPApi,
     MegaHTTPApi,
     P2PClientProtocol,
@@ -187,8 +203,11 @@ import type {
     HTTPApiRequest,
     IndexedProperty,
     MegaResult,
+    Station,
     StationListResponse,
 } from 'eufy-security-client';
+
+import { isFixedSizeV2Picture, redecodeV2Picture } from './picture';
 
 /** Client options the adapter always passes to EufySecurity.initialize() - see section 4 above. */
 export const eufyClientOptions: Pick<EufySecurityConfig, 'enableEmbeddedPKCS1Support'> = {
@@ -580,5 +599,29 @@ export const applyEufyApiCompatibility = (log: (message: string) => void): void 
             );
         }
         return true;
+    };
+
+    // 9. Rebuild a P2P event picture at its real size instead of the library's fixed 288x176.
+    // The handler is private in the typings; the library calls it through `this` on every download.
+    const client = EufySecurity.prototype as unknown as {
+        onStationImageDownload: (station: Station, file: string, image: Buffer) => void;
+    };
+    const originalOnStationImageDownload = client.onStationImageDownload;
+    let reportedFixedSizePicture = false;
+
+    client.onStationImageDownload = function (station: Station, file: string, image: Buffer): void {
+        if (!isFixedSizeV2Picture(image)) {
+            originalOnStationImageDownload.call(this, station, file, image);
+            return;
+        }
+        void redecodeV2Picture(image).then(rebuilt => {
+            if (rebuilt && !reportedFixedSizePicture) {
+                reportedFixedSizePicture = true;
+                log(
+                    `The library rebuilt the event picture ${file} of station ${station.getSerial()} at a fixed 288x176. The adapter rebuilds it at its real size.`,
+                );
+            }
+            originalOnStationImageDownload.call(this, station, file, rebuilt ?? image);
+        });
     };
 };

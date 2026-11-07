@@ -5,6 +5,7 @@ import {
     CommandType,
     Device,
     DeviceType,
+    EufySecurity,
     HTTPApi,
     MegaHTTPApi,
     P2PClientProtocol,
@@ -28,6 +29,7 @@ import {
     substituteDeviceTypes,
     watchPushConnection,
 } from './eufyApiCompat';
+import { buildV2Picture, jpegGeometry } from './picture.test';
 
 describe('eufyApiCompat => parseSerialList', () => {
     it('should trim, upper case and deduplicate the serial numbers of an array', () => {
@@ -212,8 +214,17 @@ describe('eufyApiCompat => applyEufyApiCompatibility', () => {
     let pushCheckEndpoints: string[] = [];
     let callResults: MegaResult[] = [];
     let callArguments: unknown[][] = [];
+    // Pictures that reached the library's handler, in order, with the file name they came with.
+    const downloads: { file: string; image: Buffer }[] = [];
 
     before(() => {
+        (EufySecurity.prototype as unknown as { onStationImageDownload: unknown }).onStationImageDownload = (
+            _station: Station,
+            file: string,
+            image: Buffer,
+        ): void => {
+            downloads.push({ file, image });
+        };
         HTTPApi.prototype.checkPushToken = function (): Promise<boolean> {
             throw new Error('the library check logs its expected rejection as an error and must not run');
         };
@@ -539,6 +550,64 @@ describe('eufyApiCompat => applyEufyApiCompatibility', () => {
 
         it('should say once that the E30 is handled like the E340', () => {
             expect(e30Messages()).to.equal(1);
+        });
+    });
+
+    describe('P2P event pictures', function () {
+        // The size detection decodes the picture at up to a hundred sizes.
+        this.timeout(30000);
+        const station = { getSerial: (): string => 'T8010N0000000000' } as Station;
+        const download = (file: string, image: Buffer): void =>
+            (
+                EufySecurity.prototype as unknown as {
+                    onStationImageDownload: (station: Station, file: string, image: Buffer) => void;
+                }
+            ).onStationImageDownload(station, file, image);
+        const until = async (count: number): Promise<void> => {
+            while (downloads.length < count) {
+                await new Promise(resolve => setTimeout(resolve, 20));
+            }
+        };
+        const pictureMessages = (): string[] => messages.filter(message => message.includes('fixed 288x176'));
+
+        beforeEach(() => {
+            downloads.length = 0;
+        });
+
+        it('should hand on a picture rebuilt at 288x176 at its real size (forum topic 85382)', async () => {
+            download('/media/a.jpg', buildV2Picture(400, 304).rebuiltAt288x176);
+            expect(downloads, 'the handler waits for the rebuild').to.have.length(0);
+            await until(1);
+            expect(downloads[0].file).to.equal('/media/a.jpg');
+            expect(jpegGeometry(downloads[0].image).slice(0, 2)).to.deep.equal([400, 304]);
+            expect(pictureMessages()).to.have.length(1);
+            expect(pictureMessages()[0]).to.include('/media/a.jpg of station T8010N0000000000');
+        });
+
+        it('should hand on other pictures unchanged and at once', () => {
+            const jpeg = Buffer.from('ffd8ffe000104a46494600010100000100010000ffd9', 'hex');
+            const blob = buildV2Picture(400, 304).blob;
+            download('/media/b.jpg', jpeg);
+            download('/media/c.jpg', blob);
+            download('/media/d.jpg', Buffer.alloc(0));
+            expect(downloads.map(({ file }) => file)).to.deep.equal(['/media/b.jpg', '/media/c.jpg', '/media/d.jpg']);
+            expect(downloads[0].image).to.equal(jpeg);
+            expect(downloads[1].image).to.equal(blob);
+        });
+
+        it('should hand on the picture as it came when it cannot be rebuilt', async () => {
+            const rebuilt = buildV2Picture(400, 304).rebuiltAt288x176;
+            const header = rebuilt.subarray(0, rebuilt.indexOf(Buffer.from('ffc4001f01', 'hex')));
+            const broken = Buffer.concat([header, Buffer.alloc(64, 0x11)]);
+            download('/media/e.jpg', broken);
+            await until(1);
+            expect(downloads[0].image).to.equal(broken);
+        });
+
+        it('should say only once that it rebuilds pictures', async () => {
+            download('/media/f.jpg', buildV2Picture(400, 304).rebuiltAt288x176);
+            await until(1);
+            expect(pictureMessages()).to.have.length(1);
         });
     });
 });

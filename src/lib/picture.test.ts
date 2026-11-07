@@ -1,7 +1,15 @@
 import { expect } from 'chai';
+import path from 'node:path';
+import jpegJs from 'jpeg-js';
 import { CommandName, PropertyName, type Picture, type PropertyValue } from 'eufy-security-client';
 
-import { describePictureData, getPictureExtension, schedulePictureOverP2P } from './picture';
+import {
+    describePictureData,
+    getPictureExtension,
+    isFixedSizeV2Picture,
+    redecodeV2Picture,
+    schedulePictureOverP2P,
+} from './picture';
 
 const JPEG_HEAD = Buffer.from('ffd8ffe000104a464946', 'hex');
 
@@ -156,5 +164,108 @@ describe('picture => schedulePictureOverP2P', () => {
         const f = fakes({}, []);
         expect(schedulePictureOverP2P(f.station, f.device, new Set(), f.setTimer)).to.equal(false);
         expect(f.timers).to.deep.equal([]);
+    });
+});
+
+/** eufy-security-client's v2 decoder, loaded by its file path because the package does not export it. */
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const v2Decoder = require(
+    path.join(path.dirname(require.resolve('eufy-security-client')), 'http', 'decodeImageV2.js'),
+) as { spliceV2Image: (data: Buffer, width: number, height: number, subsampling: string) => Buffer };
+
+/**
+ * Builds a `v2_eufysecurity` picture of the given size the way a station sends it: the JPEG header
+ * up to the chroma Huffman tables replaced by bytes the client cannot read, the rest left plain.
+ * The content is smooth and not periodic, like a camera picture; a periodic pattern would let the
+ * size detection settle on a wrong width. Also returns what the client's P2P path makes of it.
+ *
+ * @param width width of the picture
+ * @param height height of the picture
+ */
+export const buildV2Picture = function (width: number, height: number): { blob: Buffer; rebuiltAt288x176: Buffer } {
+    const pixels = Buffer.alloc(width * height * 4);
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const edge = y > height / 2 && x > width / 3 && x < width / 2 ? 60 : 0;
+            const value = 128 + 50 * Math.sin(x / 29 + y / 53) + 40 * Math.cos(y / 17 - (x * x) / 9000) + edge;
+            pixels.fill(Math.max(0, Math.min(255, Math.round(value))), (y * width + x) * 4, (y * width + x) * 4 + 3);
+            pixels[(y * width + x) * 4 + 3] = 255;
+        }
+    }
+    const jpeg = jpegJs.encode({ data: pixels, width, height }, 85).data;
+    // jpeg-js writes the four Huffman tables into one segment, eufy one segment per table. The DC and
+    // AC luma tables take 29 and 179 bytes, the DC and AC chroma tables follow.
+    const dht = jpeg.indexOf(Buffer.from([0xff, 0xc4]));
+    const tables = dht + 4;
+    const plain = Buffer.concat([
+        Buffer.from('ffc4001f', 'hex'),
+        jpeg.subarray(tables + 208, tables + 237),
+        Buffer.from('ffc400b5', 'hex'),
+        jpeg.subarray(tables + 237, tables + 416),
+        jpeg.subarray(dht + 2 + jpeg.readUInt16BE(dht + 2)),
+    ]);
+    const blob = Buffer.concat([
+        Buffer.from('v2_eufysecurity:T8210P0000000000:0123456789:', 'latin1'),
+        Buffer.alloc(300, 0xa5),
+        plain,
+    ]);
+    return { blob, rebuiltAt288x176: v2Decoder.spliceV2Image(blob, 288, 176, '4:2:0') };
+};
+
+/** Width, height and luma sampling factor from the SOF0 segment of a JPEG. */
+export const jpegGeometry = function (jpeg: Buffer): [number, number, number] {
+    const sof = jpeg.indexOf(Buffer.from([0xff, 0xc0]));
+    return [jpeg.readUInt16BE(sof + 7), jpeg.readUInt16BE(sof + 5), jpeg[sof + 11]];
+};
+
+describe('picture => isFixedSizeV2Picture', () => {
+    const { blob, rebuiltAt288x176 } = buildV2Picture(400, 304);
+    // Header of the 288x176 rebuild: everything before the blob's plain chroma Huffman tables.
+    const header = rebuiltAt288x176.subarray(0, rebuiltAt288x176.indexOf(Buffer.from('ffc4001f01', 'hex')));
+
+    it('should recognise a picture the client rebuilt at 288x176', () => {
+        expect(jpegGeometry(rebuiltAt288x176)).to.deep.equal([288, 176, 0x22]);
+        expect(isFixedSizeV2Picture(rebuiltAt288x176)).to.equal(true);
+        expect(isFixedSizeV2Picture(Buffer.concat([header, Buffer.from([0xff])])), 'one byte after it').to.equal(true);
+    });
+
+    it('should leave the raw blob, ordinary JPEGs and other sizes alone', () => {
+        expect(isFixedSizeV2Picture(blob)).to.equal(false);
+        expect(
+            isFixedSizeV2Picture(jpegJs.encode({ data: Buffer.alloc(16 * 16 * 4), width: 16, height: 16 }).data),
+        ).to.equal(false);
+        const otherSize = Buffer.from(rebuiltAt288x176);
+        otherSize.writeUInt16BE(800, otherSize.indexOf(Buffer.from([0xff, 0xc0])) + 7);
+        expect(jpegGeometry(otherSize)[0]).to.equal(800);
+        expect(isFixedSizeV2Picture(otherSize)).to.equal(false);
+    });
+
+    it('should reject the header alone, empty data and data that is no buffer', () => {
+        expect(isFixedSizeV2Picture(header), 'header without scan').to.equal(false);
+        expect(isFixedSizeV2Picture(header.subarray(0, 10))).to.equal(false);
+        expect(isFixedSizeV2Picture(Buffer.alloc(0))).to.equal(false);
+        expect(isFixedSizeV2Picture(undefined)).to.equal(false);
+        expect(isFixedSizeV2Picture(null)).to.equal(false);
+        expect(isFixedSizeV2Picture(rebuiltAt288x176.toString('latin1'))).to.equal(false);
+        expect(isFixedSizeV2Picture(new Uint8Array(rebuiltAt288x176))).to.equal(false);
+    });
+});
+
+describe('picture => redecodeV2Picture', function () {
+    // The size detection decodes the picture at up to a hundred sizes.
+    this.timeout(30000);
+
+    it('should rebuild a 400x304 picture at its real size (forum topic 85382)', async () => {
+        const rebuilt = await redecodeV2Picture(buildV2Picture(400, 304).rebuiltAt288x176);
+        expect(rebuilt).to.be.instanceOf(Buffer);
+        expect(jpegGeometry(rebuilt!).slice(0, 2)).to.deep.equal([400, 304]);
+        expect(rebuilt!.subarray(-2).toString('hex'), 'a complete JPEG').to.equal('ffd9');
+    });
+
+    it('should return undefined for data without a plain JPEG scan', async () => {
+        const { rebuiltAt288x176 } = buildV2Picture(400, 304);
+        const header = rebuiltAt288x176.subarray(0, rebuiltAt288x176.indexOf(Buffer.from('ffc4001f01', 'hex')));
+        expect(await redecodeV2Picture(Buffer.concat([header, Buffer.alloc(64, 0x11)]))).to.equal(undefined);
+        expect(await redecodeV2Picture(Buffer.alloc(0))).to.equal(undefined);
     });
 });
