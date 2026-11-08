@@ -1,7 +1,9 @@
 # Older changes
+## 3.5.0 (2026-10-11)
+- (hdering) The eufyCam C37 (T814X) is no longer an unknown device without states: the adapter handles it like the eufyCam S4. Livestream, motion, person and vehicle detection, light, pan and tilt and the battery states should work, but are not confirmed on a real camera yet - please report in #198
+
 ## 3.4.2 (2026-10-05)
 - (typhosj) On-demand livestreams no longer show only a picture every few seconds and then go black. Since 3.4.0 every keyframe of 16 KB or more was taken for a go2rtc that does not keep up, and the video up to the next keyframe was dropped. Data is now only dropped once more than 4 MB wait for go2rtc (reported in the forum)
-
 
 ## 3.4.1 (2026-10-05)
 - (typhosj) Updating the adapter clears the node process parameters of all eusec instances again, which removes `--security-revert=CVE-2023-46809` left over from adapter 2.x. The install script that removed only this flag is gone, since install scripts are not allowed for ioBroker adapters. Other parameters such as `--max-old-space-size` have to be entered again after each update
