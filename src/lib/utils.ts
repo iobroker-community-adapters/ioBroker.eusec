@@ -53,6 +53,44 @@ export const setPropertyState = async function (
     return true;
 };
 
+/** How long a written device or station setting may stay unacknowledged before eusec warns. */
+export const WRITE_CONFIRM_TIMEOUT_MS = 60_000;
+
+/**
+ * Checks a written setting once {@link WRITE_CONFIRM_TIMEOUT_MS} has passed. The library confirms a
+ * setting by updating the property, which eusec stores with ack. A rejected or timed out command is
+ * logged, but the library drops a command without any result when the P2P session resets while the
+ * command is in flight, and it reports no change when the property already had the written value.
+ * In both cases nothing would ever acknowledge the state.
+ *
+ * @param adapter The adapter instance
+ * @param id The id of the written state
+ * @param written The state as written, its ts identifies the write
+ * @param propertyValue The current property value of the device or station, as state value
+ * @returns confirmed: acknowledged or deleted meanwhile; superseded: written again since, that
+ *     write has its own check; unchanged: the property already had the value, now acknowledged;
+ *     unconfirmed: the command got lost or the device ignored it
+ */
+export const checkWriteConfirmation = async (
+    adapter: Pick<ioBroker.Adapter, 'getStateAsync' | 'setStateAsync'>,
+    id: string,
+    written: ioBroker.State,
+    propertyValue: unknown,
+): Promise<'confirmed' | 'superseded' | 'unchanged' | 'unconfirmed'> => {
+    const current = await adapter.getStateAsync(id);
+    if (!current || current.ack) {
+        return 'confirmed';
+    }
+    if (current.ts !== written.ts) {
+        return 'superseded';
+    }
+    if (propertyValue === current.val) {
+        await adapter.setStateAsync(id, { val: current.val, ack: true });
+        return 'unchanged';
+    }
+    return 'unconfirmed';
+};
+
 /** Parts of common that js-controller keeps on setObject() and that other adapters or the user own. */
 const PRESERVED_COMMON = ['custom', 'smartName', 'material', 'habpanel', 'mobile'];
 

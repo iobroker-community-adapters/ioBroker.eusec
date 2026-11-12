@@ -2,6 +2,7 @@ import { expect } from 'chai';
 
 import type { ioBrokerLogger } from './log';
 import {
+    checkWriteConfirmation,
     commonChanged,
     compareVersions,
     deleteEmptyUnknownChannels,
@@ -273,5 +274,86 @@ describe('utils => deleteEmptyUnknownChannels', () => {
         const { adapter, deleted } = fakeAdapter({});
         await deleteEmptyUnknownChannels(adapter);
         expect(deleted).to.deep.equal([]);
+    });
+});
+
+describe('utils => checkWriteConfirmation', () => {
+    const id = 'eusec.0.T1.cameras.T2.notification_motion';
+    const written = {
+        val: true,
+        ack: false,
+        ts: 1000,
+        lc: 1000,
+        from: 'system.adapter.admin.0',
+        q: 0,
+    } as ioBroker.State;
+    const stateAdapter = (
+        current: ioBroker.State | null,
+    ): { adapter: Pick<ioBroker.Adapter, 'getStateAsync' | 'setStateAsync'>; writes: [string, unknown][] } => {
+        const writes: [string, unknown][] = [];
+        const adapter = {
+            getStateAsync: () => Promise.resolve(current),
+            setStateAsync: (stateId: string, state: unknown) => {
+                writes.push([stateId, state]);
+                return Promise.resolve(stateId);
+            },
+        } as unknown as Pick<ioBroker.Adapter, 'getStateAsync' | 'setStateAsync'>;
+        return { adapter, writes };
+    };
+
+    it('should report a write the device confirmed', async () => {
+        const { adapter, writes } = stateAdapter({ ...written, ack: true, ts: 2000 });
+        expect(await checkWriteConfirmation(adapter, id, written, true)).to.equal('confirmed');
+        expect(writes).to.deep.equal([]);
+    });
+
+    it('should count a value the cloud corrected as confirmed', async () => {
+        // The cloud poll wrote the real value back with ack, so the state shows the truth again.
+        const { adapter } = stateAdapter({ ...written, val: false, ack: true, ts: 2000 });
+        expect(await checkWriteConfirmation(adapter, id, written, false)).to.equal('confirmed');
+    });
+
+    it('should treat a deleted state as settled', async () => {
+        const { adapter, writes } = stateAdapter(null);
+        expect(await checkWriteConfirmation(adapter, id, written, true)).to.equal('confirmed');
+        expect(writes).to.deep.equal([]);
+    });
+
+    it('should leave a newer write to its own check', async () => {
+        const { adapter, writes } = stateAdapter({ ...written, val: false, ts: 1500 });
+        expect(await checkWriteConfirmation(adapter, id, written, true)).to.equal('superseded');
+        expect(writes).to.deep.equal([]);
+    });
+
+    it('should report a write that was never confirmed', async () => {
+        // forum 85382 #87: notification_motion stayed unacknowledged from admin.0, nothing in the log.
+        const { adapter, writes } = stateAdapter({ ...written });
+        expect(await checkWriteConfirmation(adapter, id, written, false)).to.equal('unconfirmed');
+        expect(writes).to.deep.equal([]);
+    });
+
+    it('should report a write whose property value is unknown', async () => {
+        const { adapter } = stateAdapter({ ...written });
+        expect(await checkWriteConfirmation(adapter, id, written, undefined)).to.equal('unconfirmed');
+    });
+
+    it('should acknowledge a write the property already had', async () => {
+        // The library reports no property change when the value stays the same, so nothing acks it.
+        const { adapter, writes } = stateAdapter({ ...written });
+        expect(await checkWriteConfirmation(adapter, id, written, true)).to.equal('unchanged');
+        expect(writes).to.deep.equal([[id, { val: true, ack: true }]]);
+    });
+
+    it('should acknowledge a falsy value the property already had', async () => {
+        const off = { ...written, val: false };
+        const { adapter, writes } = stateAdapter({ ...off });
+        expect(await checkWriteConfirmation(adapter, id, off, false)).to.equal('unchanged');
+        expect(writes).to.deep.equal([[id, { val: false, ack: true }]]);
+    });
+
+    it('should not take 0 for false', async () => {
+        const off = { ...written, val: false };
+        const { adapter } = stateAdapter({ ...off });
+        expect(await checkWriteConfirmation(adapter, id, off, 0)).to.equal('unconfirmed');
     });
 });

@@ -42,6 +42,7 @@ import pathToFfmpeg from 'ffmpeg-for-homebridge';
 
 import { DeviceStateID, DataLocation, RoleMapping, StationStateID } from './lib/types';
 import {
+    checkWriteConfirmation,
     commonChanged,
     compareVersions,
     convertCamelCaseToSnakeCase,
@@ -52,6 +53,7 @@ import {
     setPropertyState,
     setStateChangedAsync,
     toStateValue,
+    WRITE_CONFIRM_TIMEOUT_MS,
 } from './lib/utils';
 import { handleMessage } from './lib/messages';
 import type { PersistentData } from './lib/interfaces';
@@ -697,6 +699,9 @@ export class euSec extends Adapter {
                         if (obj) {
                             if (obj.native.name !== undefined) {
                                 await this.eufy.setStationProperty(station_sn, obj.native.name, state.val);
+                                this.watchWriteConfirmation(id, state, obj, station_sn, () =>
+                                    this.eufy.getStation(station_sn),
+                                );
                                 return;
                             }
                         }
@@ -728,6 +733,9 @@ export class euSec extends Adapter {
                                     device_sn,
                                     obj.native.name,
                                     obj.common.type === 'object' ? JSON.parse(state.val as string) : state.val,
+                                );
+                                this.watchWriteConfirmation(id, state, obj, device_sn, () =>
+                                    this.eufy.getDevice(device_sn),
                                 );
                             } catch (error) {
                                 this.logger.error(
@@ -1408,6 +1416,46 @@ export class euSec extends Adapter {
 
     private async onMQTTClose(): Promise<void> {
         await this.setStateAsync('info.mqtt_connection', { val: false, ack: true }).catch(() => {});
+    }
+
+    /**
+     * Warns when a written setting is still unacknowledged after {@link WRITE_CONFIRM_TIMEOUT_MS}.
+     * Without it, a command the library dropped left no trace in the log (forum 85382 #87).
+     *
+     * Known limit: object states are skipped, their JSON may differ in key order from the property
+     * value, which would turn every unchanged write into a false warning.
+     *
+     * @param id The id of the written state
+     * @param written The state as written
+     * @param obj The state object, native.name is the property
+     * @param serial Serial of the device or station, for the log
+     * @param owner Returns the device or station that has the property
+     */
+    private watchWriteConfirmation(
+        id: string,
+        written: ioBroker.State,
+        obj: ioBroker.Object,
+        serial: string,
+        owner: () => Promise<Device | Station>,
+    ): void {
+        if (obj.common.type === 'object') {
+            return;
+        }
+        const name = obj.native.name as string;
+        this.setTimeout(() => {
+            void (async () => {
+                try {
+                    const value = toStateValue(obj.common.type, (await owner()).getPropertyValue(name));
+                    if ((await checkWriteConfirmation(this, id, written, value)) === 'unconfirmed') {
+                        this.logger.warn(
+                            `${serial}: setting ${name} = ${written.val} was not confirmed within ${WRITE_CONFIRM_TIMEOUT_MS / 1000} seconds. The command got lost, most likely because the P2P connection to the station was re-established, or the device ignored it. Please write it again.`,
+                        );
+                    }
+                } catch (error) {
+                    this.logger.debug(`Checking the confirmation of ${id} failed`, error);
+                }
+            })();
+        }, WRITE_CONFIRM_TIMEOUT_MS);
     }
 
     private onStationCommandResult(station: Station, result: CommandResult): void {
