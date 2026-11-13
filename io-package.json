@@ -153,6 +153,7 @@
     "tier": 2,
     "messagebox": true,
     "stopBeforeUpdate": true,
+    "stopTimeout": 3000,
     "nodeProcessParams": [],
     "nogit": true,
     "dependencies": [
