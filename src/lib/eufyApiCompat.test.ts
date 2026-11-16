@@ -452,6 +452,133 @@ describe('eufyApiCompat => applyEufyApiCompatibility', () => {
         });
     });
 
+    describe('P2P send queue', () => {
+        // A bare session that runs the library's real queue and send code; only the socket is replaced.
+        const createSession = (): {
+            // sendCommand() and sendQueuedMessage() are private in the typings; they are plain methods at runtime.
+            internals: {
+                sendQueue: unknown[];
+                messageStates: Map<number, { timeout?: unknown; retryTimeout?: unknown }>;
+                sendCommand: (command: { commandType: number; channel: number }) => void;
+                sendQueuedMessage: () => void;
+            };
+            sent: Buffer[];
+            results: { command_type: number; return_code: number }[];
+        } => {
+            const sent: Buffer[] = [];
+            const results: { command_type: number; return_code: number }[] = [];
+            const session = Object.create(P2PClientProtocol.prototype) as P2PClientProtocol;
+            const internals = Object.assign(session, {
+                connected: true,
+                energySavingDevice: false,
+                rawStation: { station_sn: 'T84A1P1025022A63' },
+                sendQueue: [] as unknown[],
+                messageStates: new Map<number, { timeout?: unknown; retryTimeout?: unknown }>(),
+                p2pSeqMapping: new Map<number, number>(),
+                seqNumber: 0,
+                p2pDataSeqNumber: 0,
+                encryption: 0,
+                MAX_COMMAND_QUEUE_TIMEOUT: 120_000,
+                MAX_AKNOWLEDGE_TIMEOUT: 60_000,
+                RESEND_NOT_ACKNOWLEDGED_COMMAND: 60_000,
+                sendMessage: (
+                    _errorSubject: string,
+                    _address: unknown,
+                    _type: unknown,
+                    data: Buffer,
+                ): Promise<void> => {
+                    sent.push(data);
+                    return Promise.resolve();
+                },
+                emit: (event: string, result: { command_type: number; return_code: number }): boolean => {
+                    if (event === 'command') {
+                        results.push(result);
+                    }
+                    return true;
+                },
+            });
+            return { internals: internals, sent, results };
+        };
+        const queued = (commandType: number, timestamp: number | undefined): unknown => ({
+            p2pCommand: { commandType, channel: 0 },
+            timestamp,
+        });
+        const sessions: ReturnType<typeof createSession>[] = [];
+        const tracked = (): ReturnType<typeof createSession> => {
+            const created = createSession();
+            sessions.push(created);
+            return created;
+        };
+
+        afterEach(() => {
+            for (const { internals } of sessions.splice(0)) {
+                for (const state of internals.messageStates.values()) {
+                    clearTimeout(state.timeout as NodeJS.Timeout);
+                    clearTimeout(state.retryTimeout as NodeJS.Timeout);
+                }
+            }
+        });
+
+        it('should send a new command although several commands aged out in the queue before it', async () => {
+            const { internals, sent, results } = tracked();
+            const old = Date.now() - 15 * 60 * 60 * 1000;
+            internals.sendQueue.push(
+                queued(CommandType.CMD_DATABASE, old),
+                queued(CommandType.CMD_BIND_BROADCAST, old),
+                queued(CommandType.CMD_SDINFO_EX, old),
+            );
+
+            internals.sendCommand({ commandType: CommandType.CMD_CAMERA_INFO, channel: 255 });
+            await Promise.resolve();
+
+            expect(internals.sendQueue, 'queue after the new command').to.deep.equal([]);
+            expect(sent).to.have.lengthOf(1);
+            expect(sent[0].readUInt16BE(2), 'sequence of the new command').to.equal(0);
+            expect(results.map(result => result.command_type)).to.deep.equal([
+                CommandType.CMD_DATABASE,
+                CommandType.CMD_BIND_BROADCAST,
+                CommandType.CMD_SDINFO_EX,
+            ]);
+            expect(messages.filter(message => message.includes('P2P send queue'))).to.have.lengthOf(1);
+        });
+
+        it('should empty a queue that holds only aged commands, aged pings included', () => {
+            const { internals, sent, results } = tracked();
+            const old = Date.now() - 121_000;
+            internals.sendQueue.push(queued(CommandType.CMD_PING, old), queued(CommandType.CMD_DATABASE, old));
+
+            internals.sendQueuedMessage();
+
+            expect(internals.sendQueue).to.deep.equal([]);
+            expect(sent).to.deep.equal([]);
+            expect(
+                results.map(result => result.command_type),
+                'pings age out silently',
+            ).to.deep.equal([CommandType.CMD_DATABASE]);
+        });
+
+        it('should treat a queued command without a timestamp as aged, like the library does', () => {
+            const { internals, sent } = tracked();
+            internals.sendQueue.push(queued(CommandType.CMD_DATABASE, undefined));
+
+            internals.sendCommand({ commandType: CommandType.CMD_CAMERA_INFO, channel: 255 });
+
+            expect(internals.sendQueue).to.deep.equal([]);
+            expect(sent).to.have.lengthOf(1);
+        });
+
+        it('should keep a command that is just within the queue timeout and send it first', () => {
+            const { internals, sent } = tracked();
+            internals.sendQueue.push(queued(CommandType.CMD_DATABASE, Date.now() - 119_000));
+
+            internals.sendCommand({ commandType: CommandType.CMD_CAMERA_INFO, channel: 255 });
+
+            expect(sent, 'only one command may wait for its acknowledgement').to.have.lengthOf(1);
+            expect(internals.sendQueue).to.have.lengthOf(1);
+            expect(internals.messageStates.size).to.equal(1);
+        });
+    });
+
     describe('Floodlight Cam E30', () => {
         const serial = 'T8426P0000000000';
         const sent: { commandType: number; value: string }[] = [];

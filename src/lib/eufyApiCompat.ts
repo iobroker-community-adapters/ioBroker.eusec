@@ -16,6 +16,7 @@
  * 7. Floodlight Cam E30: defined like the Floodlight Cam E340, but its commands take another route - same.
  * 8. Excluded devices: devices and stations the instance ignores, as configured - same.
  * 9. P2P event pictures: rebuilt at a fixed 288x176, which turns larger ones into grey streaks - same.
+ * 10. P2P send queue: a command that aged out stops the queue, so no later command is sent - same.
  *
  * ## 1. Success code
  *
@@ -184,6 +185,21 @@
  * recognized by that fixed header and rebuilt with the trial decoding before anything stores it.
  *
  * Remove this shim once the library decodes P2P pictures at their real size.
+ *
+ * ## 10. P2P send queue
+ *
+ * The library queues every P2P command and sends the next one when the previous one is
+ * acknowledged, when a new command is queued, or when the connection comes up. A command that has
+ * waited longer than 120 seconds is dropped with ERROR_CONNECT_TIMEOUT instead of being sent, but
+ * `_sendCommand()` then returns without moving on to the next command in the queue. Commands pile
+ * up while a station is unreachable, so after the reconnect only the first stale one is dropped and
+ * the rest stay. From then on every new command drops exactly one stale command and queues itself
+ * behind the others, so it never goes out either - the queue does not drain until the adapter
+ * restarts. On a live host a wired camera stopped streaming for two days after a 10-minute outage:
+ * every livestream request logged only `Command aged out from send queue` for an older command.
+ * The adapter moves on to the next queued command after each one that aged out.
+ *
+ * Remove this shim once the library continues with the queue after dropping a stale command.
  */
 
 import {
@@ -623,5 +639,35 @@ export const applyEufyApiCompatibility = (log: (message: string) => void): void 
             }
             originalOnStationImageDownload.call(this, station, file, rebuilt ?? image);
         });
+    };
+
+    // 10. Continue with the P2P send queue after a command that aged out in it.
+    // Queue and send methods are private in the typings; the library calls them through `this`.
+    type QueueSession = {
+        _sendCommand: (message: { p2pCommand?: unknown; timestamp?: number }) => Promise<void>;
+        sendQueuedMessage: () => void;
+        MAX_COMMAND_QUEUE_TIMEOUT: number;
+        rawStation: { station_sn: string };
+    };
+    const session = P2PClientProtocol.prototype as unknown as QueueSession;
+    const originalSendCommand = session._sendCommand;
+    let reportedAgedQueue = false;
+
+    session._sendCommand = function (this: QueueSession, message) {
+        const result = originalSendCommand.call(this, message);
+        // Same test as the library, after its own, so a command it sent is never counted as aged.
+        // An extra call after a sent command is harmless: the queue waits for its acknowledgement.
+        const aged =
+            message?.p2pCommand !== undefined && !(Date.now() - message.timestamp! <= this.MAX_COMMAND_QUEUE_TIMEOUT);
+        if (aged) {
+            if (!reportedAgedQueue) {
+                reportedAgedQueue = true;
+                log(
+                    `Commands for station ${this.rawStation?.station_sn} waited too long in the P2P send queue. The adapter drops all of them instead of one per new command, so new commands are sent again.`,
+                );
+            }
+            this.sendQueuedMessage();
+        }
+        return result;
     };
 };
