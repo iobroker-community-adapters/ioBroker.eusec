@@ -6,29 +6,52 @@ import { pipeline as streamPipeline } from 'node:stream/promises';
 
 import type { ioBrokerLogger } from './log';
 import { isRegularStreamEnd } from './go2rtc';
-import { createSpsLevelPatcher } from './h264';
+import { createKeyframeGate, createSpsLevelPatcher } from './h264';
 import { getShortUrl } from './utils';
 
 /**
- * Builds the transform the video of a livestream passes on its way to go2rtc.
+ * Resolution the last livestream of each device ran at, by serial. A livestream that starts in
+ * another one is held back by the keyframe gate. Known limit: kept in memory only, so the first
+ * livestream of each device after an adapter start is always held back.
+ */
+const geometries = new Map<string, string>();
+
+/**
+ * Builds the filter the video of a livestream passes on its way to go2rtc.
  *
- * The cameras declare a fixed level 4.2 in their SPS, which makes decoders that stop at a lower
- * level render the stream as green macroblocks. Only H.264 has that layout - anything else is
- * handed to go2rtc untouched.
+ * Both steps keep green macroblocks away from the player. A livestream can begin in another
+ * resolution or with unreadable pictures, which the keyframe gate holds back. The cameras declare a
+ * fixed level 4.2 in their SPS, which makes decoders that stop at a lower level fail - the level
+ * patcher fixes that. Only H.264 has that layout, anything else is handed to go2rtc untouched.
  *
- * @param camera Serial of the device, for the log
+ * @param camera Serial of the device, for the log and the resolution of its last livestream
  * @param metadata Metadata of the livestream
  * @param log Logger
- * @returns The transform to put in front of go2rtc
+ * @returns The filter to put in front of go2rtc
  */
-export const createVideoFilter = (camera: string, metadata: StreamMetadata, log: ioBrokerLogger): stream.Transform =>
-    metadata.videoCodec === VideoCodec.H264
-        ? createSpsLevelPatcher(metadata.videoFPS, (from, to) =>
-              log.info(
-                  `streamToGo2rtc(): ${camera} - Declared H.264 level ${(from / 10).toFixed(1)} replaced with ${(to / 10).toFixed(1)}`,
-              ),
-          )
-        : new stream.PassThrough();
+export const createVideoFilter = (camera: string, metadata: StreamMetadata, log: ioBrokerLogger): stream.Duplex => {
+    if (metadata.videoCodec !== VideoCodec.H264) {
+        return new stream.PassThrough();
+    }
+    const expected = geometries.get(camera);
+    const gate = createKeyframeGate(expected, (geometry, dropped) => {
+        if (geometry) {
+            geometries.set(camera, geometry);
+        }
+        if (dropped > 0) {
+            log.info(
+                `streamToGo2rtc(): ${camera} - Livestream did not start with a clean keyframe at ${expected ?? 'a known resolution'}, dropped ${dropped} bytes up to the second keyframe (${geometry ?? 'resolution unknown'})`,
+            );
+        }
+    });
+    const patcher = createSpsLevelPatcher(metadata.videoFPS, (from, to) =>
+        log.info(
+            `streamToGo2rtc(): ${camera} - Declared H.264 level ${(from / 10).toFixed(1)} replaced with ${(to / 10).toFixed(1)}`,
+        ),
+    );
+    gate.pipe(patcher);
+    return stream.Duplex.from({ writable: gate, readable: patcher });
+};
 
 export const streamToGo2rtc = async (
     camera: string,

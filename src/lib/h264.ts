@@ -183,13 +183,12 @@ const pickLevel = (mbPerFrame: number, mbPerSecond: number, refFrames: number): 
     )?.[0];
 
 /**
- * Reads the geometry of an SPS and returns the level the stream really needs.
+ * Reads the geometry of an SPS.
  *
  * @param sps The SPS NAL unit including its header byte, without the start code
- * @param fps Frame rate reported for the stream, used when it is above the assumed one
- * @returns The level_idc that fits, or undefined when the SPS cannot be read
+ * @returns Width and height in macroblocks and the reference frames, or undefined when the SPS cannot be read
  */
-export const requiredLevel = (sps: Uint8Array, fps: number): number | undefined => {
+const readSps = (sps: Uint8Array): { widthMbs: number; heightMbs: number; refFrames: number } | undefined => {
     try {
         const reader = new BitReader(toRbsp(sps));
         reader.bits(8); // nal header
@@ -229,11 +228,37 @@ export const requiredLevel = (sps: Uint8Array, fps: number): number | undefined 
         const widthMbs = reader.ue() + 1;
         const heightMapUnits = reader.ue() + 1;
         const heightMbs = (2 - reader.bit()) * heightMapUnits; // frame_mbs_only_flag
-        const mbPerFrame = widthMbs * heightMbs;
-        return pickLevel(mbPerFrame, mbPerFrame * Math.max(fps, ASSUMED_FPS), Math.max(refFrames, 1));
+        return { widthMbs, heightMbs, refFrames };
     } catch {
         return undefined;
     }
+};
+
+/**
+ * Reads the geometry of an SPS and returns the level the stream really needs.
+ *
+ * @param sps The SPS NAL unit including its header byte, without the start code
+ * @param fps Frame rate reported for the stream, used when it is above the assumed one
+ * @returns The level_idc that fits, or undefined when the SPS cannot be read
+ */
+export const requiredLevel = (sps: Uint8Array, fps: number): number | undefined => {
+    const parsed = readSps(sps);
+    if (!parsed) {
+        return undefined;
+    }
+    const mbPerFrame = parsed.widthMbs * parsed.heightMbs;
+    return pickLevel(mbPerFrame, mbPerFrame * Math.max(fps, ASSUMED_FPS), Math.max(parsed.refFrames, 1));
+};
+
+/**
+ * Reads the picture size of an SPS, before cropping.
+ *
+ * @param sps The SPS NAL unit including its header byte, without the start code
+ * @returns The size as `<width>x<height>`, or undefined when the SPS cannot be read
+ */
+export const spsGeometry = (sps: Uint8Array): string | undefined => {
+    const parsed = readSps(sps);
+    return parsed && `${parsed.widthMbs * 16}x${parsed.heightMbs * 16}`;
 };
 
 /**
@@ -318,6 +343,136 @@ export const createSpsLevelPatcher = (fps: number, onLevel?: (from: number, to: 
         },
         flush(callback): void {
             callback(null, carry);
+        },
+    });
+};
+
+/** NAL unit type of a slice of a picture that is not a keyframe. */
+const NAL_TYPE_SLICE = 1;
+
+/** NAL unit type of a slice of a keyframe (IDR picture). */
+const NAL_TYPE_IDR = 5;
+
+/** Bytes without any picture after which a stream counts as a cold start, not a warm one. */
+const MAX_LEAD_IN = 64 * 1024;
+
+/**
+ * Reads the resolution of the SPS whose start code begins at an offset.
+ *
+ * @param buffer Buffer that holds the complete SPS and the start code after it
+ * @param at Offset of its start code, three or four bytes
+ * @returns The resolution, or undefined if the SPS cannot be read
+ */
+const geometryAt = (buffer: Buffer, at: number): string | undefined => {
+    const header = nextStartCode(buffer, at) + 3;
+    const end = nextStartCode(buffer, header);
+    return end < 0 ? undefined : spsGeometry(buffer.subarray(header, end));
+};
+
+/**
+ * Builds a stream that holds back the start of an Annex B H.264 stream that does not begin with a
+ * clean keyframe in the expected resolution, until its second keyframe.
+ *
+ * A livestream can start with its first keyframe interval in another resolution - a Wall Light
+ * Cam S100 that streams at 1600x1200 sent 1.4 s of 2048x1536 first. go2rtc builds its init segment from the first SPS and none for the switch, so
+ * a browser keeps decoding with the wrong size and shows a frozen picture with a flickering
+ * stripe at the top, or green blocks. Picture data before the first SPS, or an SPS that cannot be
+ * read, ends the same way. A livestream that starts with a readable SPS of the expected size
+ * followed by a keyframe is handed on untouched, so only the other ones pay for the wait.
+ *
+ * Known limit: a held-back start loses up to two keyframe intervals (about 2 s on the tested
+ * cameras), also when no resolution is known yet or the quality setting was changed. A camera
+ * whose first keyframe interval in the wrong resolution lasts longer than one interval still
+ * reaches the player with the wrong size.
+ *
+ * @param expected Resolution (`<width>x<height>`) the last livestream of the device ran at, if known
+ * @param onOpen Called once when the stream is handed on, with the resolution of the SPS in front of the keyframe it opens at (undefined if none or unreadable) and the bytes dropped before it (0 for a warm start)
+ * @returns A transform stream to put in front of go2rtc
+ */
+export const createKeyframeGate = (
+    expected: string | undefined,
+    onOpen?: (geometry: string | undefined, dropped: number) => void,
+): Transform => {
+    let carry: Buffer = Buffer.alloc(0);
+    let dropped = 0;
+    let keyframes = 0;
+    let open = false;
+    // Whether the stream was judged yet. That happens at its first picture: a warm start has a
+    // readable SPS of the expected size in front of it and begins with a keyframe.
+    let judged = false;
+    // Resolution of the last SPS before the first picture, undefined if it could not be read.
+    let leading: string | undefined;
+    // Start of the SPS that leads the next picture, so the second keyframe is handed on together
+    // with the parameter sets go2rtc needs to build its init segment. Offset into the carry.
+    let unit = -1;
+    // First offset of the carry not looked at yet, so no NAL unit is counted twice.
+    let resume = 0;
+
+    return new Transform({
+        transform(chunk: Buffer, _encoding, callback): void {
+            if (open) {
+                callback(null, chunk);
+                return;
+            }
+            const buffer = carry.length > 0 ? Buffer.concat([carry, chunk]) : chunk;
+
+            let i = resume;
+            for (; i + 4 < buffer.length; i++) {
+                if (buffer[i] !== 0 || buffer[i + 1] !== 0 || buffer[i + 2] !== 1) {
+                    continue;
+                }
+                const type = buffer[i + 3] & 0x1f;
+                const start = i > 0 && buffer[i - 1] === 0 ? i - 1 : i;
+                // Only the first slice of a picture has first_mb_in_slice 0, which is coded as the
+                // single bit 1. The other slices of the same keyframe must not count.
+                const keyframe = type === NAL_TYPE_IDR && (buffer[i + 4] & 0x80) !== 0;
+                if (type === NAL_TYPE_SPS) {
+                    unit = unit < 0 ? start : unit;
+                    if (!judged) {
+                        const end = nextStartCode(buffer, i + 3);
+                        if (end < 0) {
+                            // The SPS is not complete yet - judge it once the rest arrived.
+                            break;
+                        }
+                        leading = spsGeometry(buffer.subarray(i + 3, end));
+                    }
+                } else if (type === NAL_TYPE_SLICE || type === NAL_TYPE_IDR) {
+                    if (!judged) {
+                        judged = true;
+                        if (keyframe && leading !== undefined && leading === expected) {
+                            open = true;
+                            carry = Buffer.alloc(0);
+                            onOpen?.(leading, 0);
+                            callback(null, buffer);
+                            return;
+                        }
+                    }
+                    if (keyframe && ++keyframes === 2) {
+                        const from = unit < 0 ? start : unit;
+                        open = true;
+                        carry = Buffer.alloc(0);
+                        onOpen?.(unit < 0 ? undefined : geometryAt(buffer, unit), dropped + from);
+                        callback(null, buffer.subarray(from));
+                        return;
+                    }
+                    unit = -1;
+                }
+                i += 3;
+            }
+
+            // Keep a start code that may be split across chunks, with the zero byte that can lead
+            // it and the byte after its NAL header, or the SPS that may lead the second keyframe.
+            // Before the first picture everything is kept, so a warm start loses no byte - unless
+            // so much arrived without a picture that it cannot be the start of a clean stream.
+            if (!judged && buffer.length > MAX_LEAD_IN) {
+                judged = true;
+            }
+            const keep = !judged ? 0 : unit < 0 ? Math.max(0, buffer.length - 5) : unit;
+            dropped += keep;
+            carry = Buffer.from(buffer.subarray(keep));
+            unit = unit < 0 ? -1 : unit - keep;
+            resume = Math.max(0, i - keep);
+            callback();
         },
     });
 };

@@ -1,6 +1,6 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import stream, { type Readable, type Transform } from 'node:stream';
+import stream, { type Duplex, type Readable } from 'node:stream';
 
 /**
  * Livestreams that start when somebody watches them.
@@ -187,7 +187,7 @@ export const findAdtsStart = (data: Buffer): number => {
 interface Live {
     video: Readable;
     audio: Readable;
-    videoFilter: Transform;
+    videoFilter: Duplex;
     videoSeen: boolean;
     audioSeen: boolean;
     /** No audio arrived within audioTimeout - audio requests are answered right away. */
@@ -311,7 +311,7 @@ export class OnDemandStreams {
      * @param videoFilter Transform the video passes before it reaches go2rtc
      * @param h265 Whether the video is H.265 instead of H.264
      */
-    public attach(serial: string, video: Readable, audio: Readable, videoFilter?: Transform, h265 = false): void {
+    public attach(serial: string, video: Readable, audio: Readable, videoFilter?: Duplex, h265 = false): void {
         const session = this.session(serial);
         this.endLive(session);
         session.starting = false;

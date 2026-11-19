@@ -5,7 +5,7 @@ import { PassThrough } from 'node:stream';
 import { AudioCodec, type StreamMetadata, VideoCodec } from 'eufy-security-client';
 
 import type { ioBrokerLogger } from './log';
-import { streamToGo2rtc } from './video';
+import { createVideoFilter, streamToGo2rtc } from './video';
 
 /** Stand-in for go2rtc's ReadHeaderTimeout of 5 seconds, scaled down to keep the tests fast. */
 const HEADER_TIMEOUT = 300;
@@ -124,5 +124,77 @@ describe('video => streamToGo2rtc', () => {
         expect((await results).map(result => result.status)).to.deep.equal(['fulfilled', 'fulfilled']);
         expect(errors).to.deep.equal([]);
         expect(server.ingests.map(ingest => ingest.bytes)).to.deep.equal([0, 0]);
+    });
+});
+
+describe('video => createVideoFilter', () => {
+    /** Real SPS of a Wall Light Cam S100 - 1600x1200, declared level 4.2. */
+    const sps = Buffer.from(
+        '000000012764002aad00ce8064025e9a808080f8000003000800000300f18000038f700005572efffe0500',
+        'hex',
+    );
+    const idr = Buffer.from('0000000165880101', 'hex');
+    const p = Buffer.from('00000001419a0202', 'hex');
+    const h264 = { ...metadata, videoCodec: VideoCodec.H264 } as StreamMetadata;
+
+    // The filter remembers the resolution per serial for the whole process, so every test that
+    // depends on it uses a serial of its own.
+    const run = async (
+        meta: StreamMetadata,
+        input: Buffer,
+        camera: string,
+    ): Promise<{ out: Buffer; infos: string[] }> => {
+        const infos: string[] = [];
+        const log = { ...createLog().log, info: (message: string) => infos.push(message) } as unknown as ioBrokerLogger;
+        const filter = createVideoFilter(camera, meta, log);
+        const out: Buffer[] = [];
+        filter.on('data', (chunk: Buffer) => out.push(chunk));
+        const ended = new Promise(resolve => filter.on('end', resolve));
+        filter.end(input);
+        await ended;
+        return { out: Buffer.concat(out), infos: infos.filter(info => !info.includes('DEBUG')) };
+    };
+    const gop = Buffer.concat([sps, idr, p]);
+
+    it('should hold back the first H.264 livestream of a device, whose resolution is not known yet', async () => {
+        const { out, infos } = await run(h264, Buffer.concat([gop, gop]), 'T8-first');
+
+        expect(out.length).to.equal(gop.length);
+        expect(infos[0]).to.equal(
+            `streamToGo2rtc(): T8-first - Livestream did not start with a clean keyframe at a known resolution, dropped ${gop.length} bytes up to the second keyframe (1600x1200)`,
+        );
+    });
+
+    it('should hand on the next warm H.264 start of that device completely, with the level patched', async () => {
+        await run(h264, Buffer.concat([gop, gop]), 'T8-warm');
+        const { out, infos } = await run(h264, gop, 'T8-warm');
+
+        expect(out.length).to.equal(gop.length);
+        expect(out[4 + 3]).to.equal(40);
+        expect(infos).to.deep.equal(['streamToGo2rtc(): T8-warm - Declared H.264 level 4.2 replaced with 4.0']);
+    });
+
+    it('should keep the known resolution of one device away from another one', async () => {
+        await run(h264, Buffer.concat([gop, gop]), 'T8-a');
+        const { out } = await run(h264, Buffer.concat([gop, gop]), 'T8-b');
+
+        expect(out.length).to.equal(gop.length);
+    });
+
+    it('should drop a cold H.264 start up to its second keyframe', async () => {
+        await run(h264, Buffer.concat([gop, gop]), 'T8-cold');
+        const { out, infos } = await run(h264, Buffer.concat([p, gop, gop]), 'T8-cold');
+
+        expect(out.length).to.equal(gop.length);
+        expect(infos[0]).to.equal(
+            `streamToGo2rtc(): T8-cold - Livestream did not start with a clean keyframe at 1600x1200, dropped ${p.length + gop.length} bytes up to the second keyframe (1600x1200)`,
+        );
+    });
+
+    it('should hand on H.265 untouched, even when it does not start with parameter sets', async () => {
+        const input = Buffer.concat([p, idr]);
+        const { out } = await run(metadata, input, 'T8-h265');
+
+        expect(out.equals(input)).to.equal(true);
     });
 });
