@@ -30,7 +30,7 @@
     "eufy-security-client": "4.1.1-1",
     "ffmpeg-for-homebridge": "^2.2.2",
     "go2rtc-static": "^1.9.4",
-    "got": "^16.0.0",
+    "got": "^16.2.0",
     "i18n-iso-countries": "^7.14.0"
   },
   "devDependencies": {
